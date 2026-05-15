@@ -1,0 +1,24 @@
+model:
+  provider: llamacpp
+  name: qwen3.5-4b
+  base_url: http://localhost:8080/v1
+  timeout: 180s
+  think: "false"
+  tool_choice: auto
+  response_format: text
+  provider_opts:
+    llamacpp:
+      mode: openai_compat
+      lifecycle: external
+      probe_path: /health
+      reconnect_max: 5
+      reconnect_base: 1s
+      api_key: ""
+      grammar: off
+      embedding:
+        managed:
+          enabled: false
+          port: 8081
+          host: 127.0.0.1
+          extra_flags: ["--embedding"]
+          health_timeout: 30s

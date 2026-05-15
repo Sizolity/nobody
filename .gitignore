@@ -1,0 +1,42 @@
+# --- build artifacts ---
+/harness
+/traceview
+/logview
+nobody
+nobody.exe
+coverage.out
+
+# --- editors / IDEs ---
+.DS_Store
+.idea/
+.vscode/
+.worktrees/
+
+# --- Cursor (chat exports, project files) ---
+.cursor/
+cursor_*.md
+.cursor-tutor/
+
+# --- runtime / scratch ---
+.nobody/
+.git.bak/
+
+# --- workspace: selective tracking ---
+# Tracked under workspace/: prompts/* only.
+# Everything below is per-run, per-session, or runtime scratch.
+workspace/tasks.json
+workspace/.state/
+workspace/.handoff/
+workspace/.nobody/
+workspace/logs/
+workspace/traces/
+workspace/runs/
+workspace/go-sorting/
+
+# --- secrets / local env ---
+.env
+.env.local
+.envrc
+*.pem
+*.key
+
