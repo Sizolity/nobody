@@ -15,9 +15,9 @@ import (
 )
 
 // EmitFn is the minimal sink interface the Manager needs to surface
-// lifecycle events. Matches the signature of harness.EventLogger.Emit
-// curried with component="runtime" and sessionID="" so callers do not
-// have to import that type.
+// lifecycle events. It matches EventLogger.Emit after binding
+// component="runtime" and sessionID="", so callers do not have to import
+// a concrete logger type.
 type EmitFn func(eventName, severity string, payload map[string]any)
 
 // managerState is the explicit state machine entry. See spec §2.3 for
@@ -39,9 +39,9 @@ const managerLastLogLines = 20
 // Manager owns the lifecycle of an external llama-server chat process
 // when nobody.yaml has provider_opts.llamacpp.lifecycle=managed.
 //
-// Manager is constructed via NewManager and held by harness.Harness; it
-// does NOT implement any interface in inference/ — process supervision stays
-// private to the llama.cpp runtime.
+// Manager is constructed via NewManager and held by the llama.cpp runtime; it
+// does NOT implement any interface in inference/ because process supervision
+// stays private to this package.
 type Manager struct {
 	cfg     config.ManagedConfig
 	rawEmit EmitFn
@@ -222,10 +222,9 @@ func (m *Manager) Start(ctx context.Context) error {
 // not fork them).
 //
 // Concurrency: Close MUST NOT be called concurrently with Start.
-// Callers (e.g. harness.New + harness.Close) are expected to await
-// Start completion before invoking Close. Concurrent Start+Close is
-// undefined behaviour in v1; a future revision may serialize this
-// internally.
+// Callers are expected to await Start completion before invoking Close.
+// Concurrent Start+Close is undefined behaviour in v1; a future revision may
+// serialize this internally.
 func (m *Manager) Close() error {
 	m.mu.Lock()
 	if m.state == stateClosed {

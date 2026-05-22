@@ -183,7 +183,7 @@ func isConnRefused(err error) bool {
 // failingChecker is returned when factory.NewHealthChecker encounters
 // an unrecoverable config error (e.g. provider_opts.llamacpp.mode set
 // to an unsupported value). EnsureReady reports the captured error so
-// harness.New rejects the run up-front rather than on the first
+// runtime initialization rejects the run up-front rather than on the first
 // inference call.
 type failingChecker struct{ err error }
 

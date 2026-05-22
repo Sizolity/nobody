@@ -77,8 +77,8 @@ func (factory) CreateEmbedder(
 // pulled from cfg.Model.ProviderOpts["llamacpp"] and performs the
 // initial inference_check emission before returning. An invalid mode
 // value is reported via a single inference_check/warn event; the returned
-// checker then fails EnsureReady so harness.New rejects the run before the
-// first call.
+// checker then fails EnsureReady so runtime initialization rejects the run
+// before the first call.
 func (factory) NewHealthChecker(cfg *config.Config, emit inference.EventEmitter) inference.HealthChecker {
 	if err := validateProviderOpts(cfg); err != nil {
 		emitCheck(emit, inference.EventInferenceCheck, "error", map[string]any{

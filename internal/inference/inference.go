@@ -68,9 +68,9 @@ func (s State) String() string {
 }
 
 // EventEmitter is the signature providers use to push runtime events.
-// Harness adapts its EventLogger.Emit(component="runtime", ...) to this
-// shape at wiring time; each provider is free to call emit arbitrarily
-// often, including from background goroutines.
+// Callers usually adapt EventLogger.Emit(component="runtime", ...) to this
+// shape at wiring time; each provider is free to call emit arbitrarily often,
+// including from background goroutines.
 //
 // eventName MUST be one of the Event* constants declared in events.go.
 // severity is one of the standard EventLogger severity levels

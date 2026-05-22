@@ -27,14 +27,7 @@ func LoadConfig(opts LoadOptions) (*Config, error) {
 		if err := yaml.Unmarshal(raw, cfg); err != nil {
 			return nil, fmt.Errorf("parse config file: %w", err)
 		}
-		patchMemorySection(cfg)
-		patchSkillsSection(cfg)
-		patchOrchestratorSection(cfg)
 		patchLlamacppProviderOpts(cfg)
-		patchRuntimeToolOutputSection(cfg)
-		patchRuntimeRetentionSection(cfg)
-		patchRuntimeRetrySection(cfg)
-		patchContextSection(cfg)
 		patchModelDefaults(cfg)
 		if err := validateProvider(cfg); err != nil {
 			return nil, err
@@ -60,74 +53,6 @@ func LoadConfig(opts LoadOptions) (*Config, error) {
 	}
 	cfg.applyCompatibilityMirror()
 	return cfg, nil
-}
-
-// patchMemorySection restores defaults for the (now minimal) memory section.
-// After the hot-loop memory tool and prompt-level history injection were
-// removed, the only field that still needs defaulting is DBPath — Project A
-// will expand this schema again when it lands.
-func patchMemorySection(cfg *Config) {
-	if !cfg.Memory.Enabled {
-		return
-	}
-	def := DefaultConfig().Memory
-	if cfg.Memory.DBPath == "" {
-		cfg.Memory.DBPath = def.DBPath
-	}
-}
-
-// patchSkillsSection restores defaults when YAML partially overrides skills.
-func patchSkillsSection(cfg *Config) {
-	def := DefaultConfig().Skills
-	if cfg.Skills.SkillsDir == "" {
-		cfg.Skills.SkillsDir = def.SkillsDir
-	}
-	if cfg.Skills.AgentMDPath == "" {
-		cfg.Skills.AgentMDPath = def.AgentMDPath
-	}
-	if cfg.Skills.RetrievalTopK <= 0 {
-		cfg.Skills.RetrievalTopK = def.RetrievalTopK
-	}
-	if cfg.Skills.RetrievalTimeout <= 0 {
-		cfg.Skills.RetrievalTimeout = def.RetrievalTimeout
-	}
-	if cfg.Skills.MaxRisk == "" {
-		cfg.Skills.MaxRisk = def.MaxRisk
-	}
-	if cfg.Skills.MaxSkills <= 0 {
-		cfg.Skills.MaxSkills = def.MaxSkills
-	}
-	if cfg.Skills.MaxTotalChars <= 0 {
-		cfg.Skills.MaxTotalChars = def.MaxTotalChars
-	}
-	if cfg.Skills.MaxLoadsPerTurn <= 0 {
-		cfg.Skills.MaxLoadsPerTurn = def.MaxLoadsPerTurn
-	}
-	if cfg.Skills.AutoBudgetPercent <= 0 {
-		cfg.Skills.AutoBudgetPercent = def.AutoBudgetPercent
-	}
-	if cfg.Skills.AutoBudgetEnabled == nil {
-		cfg.Skills.AutoBudgetEnabled = def.AutoBudgetEnabled
-	}
-	if cfg.Skills.StrictWorkspaceRoot == nil {
-		cfg.Skills.StrictWorkspaceRoot = def.StrictWorkspaceRoot
-	}
-}
-
-func patchOrchestratorSection(_ *Config) {
-	// Reasoner timeouts were removed along with the LLMReasoner component;
-	// nothing to backfill here for now, but keep the hook for future
-	// orchestrator-section defaults.
-}
-
-// patchContextSection fills Context defaults when the YAML file omits the
-// `context:` block entirely. If any strategy name is set we assume the user
-// has configured the section deliberately and leave it alone (per-field
-// patching is overkill for v1).
-func patchContextSection(cfg *Config) {
-	if cfg.Context.Strategy == "" {
-		cfg.Context = DefaultConfig().Context
-	}
 }
 
 // patchLlamacppProviderOpts backfills the llamacpp-specific knobs under
@@ -205,9 +130,8 @@ func validateResponseFormat(cfg *Config) error {
 }
 
 // validateLlamacppLifecycle rejects unknown lifecycle values at load
-// time. The "managed" branch activates the manager wired into harness.New
-// (see internal/inference/llamacpp/manager.go); "external" preserves
-// Phase 1 behaviour. patchLlamacppProviderOpts seeds "external" so an
+// time. The "managed" branch activates the llama.cpp process manager;
+// "external" preserves sidecar behaviour. patchLlamacppProviderOpts seeds "external" so an
 // untouched yaml never reaches this check; an explicit empty string in
 // yaml is rejected so typos fail loudly per the same convention as
 // validateLlamacppGrammar.
@@ -346,70 +270,6 @@ func validateLlamacppGrammar(cfg *Config) error {
 		return fmt.Errorf(`provider_opts.llamacpp.grammar cannot be empty string; use "off" to disable`)
 	}
 	return nil
-}
-
-// patchRuntimeToolOutputSection backfills defaults for the tool-output spill
-// controls. Note the asymmetry vs. the Ollama patch above: ToolOutputSpillBytes
-// treats a literal 0 in the YAML as "disable spilling", so we only overwrite
-// when the field is strictly negative (impossible in valid YAML; belt-and-
-// braces for programmatic construction). ToolOutputDir always gets defaulted
-// because an empty path would make the spill file constructor crash, which
-// would be worse than silently landing the files under `.nobody/tool_output`.
-func patchRuntimeToolOutputSection(cfg *Config) {
-	def := DefaultConfig().Runtime
-	if cfg.Runtime.ToolOutputSpillBytes < 0 {
-		cfg.Runtime.ToolOutputSpillBytes = def.ToolOutputSpillBytes
-	}
-	if cfg.Runtime.ToolOutputDir == "" {
-		cfg.Runtime.ToolOutputDir = def.ToolOutputDir
-	}
-}
-
-// patchRuntimeRetentionSection normalizes the tenant-layout retention
-// controls introduced in the 2026-04-21 log-architecture refactor.
-//
-// Defaults are supplied by DefaultConfig() and YAML unmarshalling overlays
-// only the fields the operator actually wrote. An explicit `0` in YAML
-// therefore reliably means "disable retention for this target", because
-// yaml.v3 overwrites the default 0 with the explicit 0 (identity).
-//
-// The only work left for the patch is to normalize illegal negative
-// values (impossible in well-formed YAML; belt-and-braces for
-// programmatic struct construction) to 0 before the sweeper consumes
-// them — a negative retention bound could otherwise be mis-interpreted
-// as "ignore everything" by future callers that rely on the sign rather
-// than presence.
-//
-// NOTE: the 4 pre-refactor keys (traces_retention_max_files /
-// traces_retention_days / handoff_sessions_retention_max /
-// tool_output_retention_hours) were retired with the tenant layout.
-// yaml.v3 silently ignores unknown keys so pre-upgrade nobody.yaml
-// files still load without error.
-func patchRuntimeRetentionSection(cfg *Config) {
-	r := &cfg.Runtime
-	if r.RunsRetentionMax < 0 {
-		r.RunsRetentionMax = 0
-	}
-	if r.RunsRetentionDays < 0 {
-		r.RunsRetentionDays = 0
-	}
-	if r.RunLogRotateMaxBytes < 0 {
-		r.RunLogRotateMaxBytes = 0
-	}
-}
-
-// patchRuntimeRetrySection repairs programmatic callers that hand in a
-// negative `Runtime.MaxAttempts` (only path where that is reachable —
-// YAML omission is handled earlier via `cfg := DefaultConfig()` seeding
-// in LoadConfig). Negative → reset to default 3. Explicit `0` in YAML
-// is preserved: `clampMaxAttempts` in harness interprets it as the
-// legacy single-attempt fallback, consistent with how other runtime
-// knobs treat explicit zeros.
-func patchRuntimeRetrySection(cfg *Config) {
-	def := DefaultConfig().Runtime
-	if cfg.Runtime.MaxAttempts < 0 {
-		cfg.Runtime.MaxAttempts = def.MaxAttempts
-	}
 }
 
 type CLIOverrides struct {

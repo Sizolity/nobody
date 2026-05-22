@@ -83,8 +83,8 @@ var queryFirstGPUVRAM = func(smiPath string) (int, error) {
 // Recommend probes nvidia-smi for the first GPU's VRAM and returns the
 // recommended {NGL, Ctx} pair per the decision matrix mirrored from
 // scripts/recommend_llamacpp_yaml.sh. Pure: no filesystem writes, no
-// nobody.yaml mutation. Caller (harness.New) is responsible for applying
-// the result via presence-based defaulting on cfg.managed.{NGL,Ctx}.
+// nobody.yaml mutation. Runtime initialization is responsible for applying the
+// result via presence-based defaulting on cfg.managed.{NGL,Ctx}.
 //
 // Decision matrix (VRAM in MiB):
 //

@@ -1,4 +1,4 @@
-package harness
+package workspace
 
 import (
 	"crypto/rand"
@@ -22,10 +22,8 @@ type EventLogger struct {
 }
 
 // Compile-time assertion that *EventLogger satisfies tools.EventSink.
-// The two types are kept in lock-step on purpose so tool runtimes can
-// emit runtime events without importing this package (which would
-// create an import cycle). If Emit's signature ever drifts, this line
-// catches it at build time instead of at a harness wiring site.
+// The two types are kept in lock-step so tool runtimes can emit runtime events
+// without depending on a concrete workspace logger.
 var _ htools.EventSink = (*EventLogger)(nil)
 
 func NewEventLogger(workspace, runID string) *EventLogger {
@@ -35,9 +33,8 @@ func NewEventLogger(workspace, runID string) *EventLogger {
 	}
 }
 
-// Emit writes a structured event to logs/<component>.jsonl. When
-// sessionID is non-empty, it is stored at the top level (parallel to
-// run_id) for easy filtering of per-session streams.
+// Emit writes a structured event to logs/<component>.jsonl. When sessionID is
+// non-empty, it is stored at the top level for easy filtering.
 func (l *EventLogger) Emit(component, event, severity, sessionID string, payload map[string]any) {
 	if l == nil {
 		return
@@ -66,16 +63,15 @@ func (l *EventLogger) Emit(component, event, severity, sessionID string, payload
 	file := component
 	switch component {
 	case "retrieval", "runtime", "session":
-		// allowed
 	default:
 		file = "runtime"
 	}
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	_ = os.MkdirAll(l.dir, 0755)
+	_ = os.MkdirAll(l.dir, 0o755)
 	fp := filepath.Join(l.dir, file+".jsonl")
-	f, err := os.OpenFile(fp, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(fp, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return
 	}
@@ -84,16 +80,7 @@ func (l *EventLogger) Emit(component, event, severity, sessionID string, payload
 }
 
 // NewRunID returns a fresh, file-system-safe, timestamp-ordered run identifier
-// of the form "run-YYYYMMDD-HHMMSS-<8-hex>". The timestamp is UTC so multiple
-// hosts (or docker containers with skewed local time) still produce
-// lexicographically-ordered IDs when collated.
-//
-// The suffix is 8 hex characters drawn from crypto/rand (~4.3B space). With
-// the birthday paradox, even ~100k calls within the same second carry a
-// collision probability below 10^-6 — effectively nil for agent workloads
-// that produce at most a few runs per second.
-//
-// Example: "run-20260419-153027-8f3a2b17".
+// of the form "run-YYYYMMDD-HHMMSS-<8-hex>".
 func NewRunID() string {
 	buf := make([]byte, 4)
 	if _, err := rand.Read(buf); err != nil {
@@ -108,18 +95,9 @@ func NewRunID() string {
 	)
 }
 
-// SanitizeRunIDForFilename strips any character that is not safe for use as
-// a file-system path component from id, replacing runs of unsafe characters
-// with a single '-'. The result is guaranteed to match [A-Za-z0-9._-]+ and
-// to be non-empty: if all characters of id are stripped the function
-// returns "run-unknown" so downstream callers never accidentally write to
-// the parent directory itself.
-//
-// NewRunID() already returns a safe string, so this function is effectively
-// the identity transform on current inputs. It is exported as a contract:
-// any code path that concatenates a run_id into a path MUST go through it,
-// so that future format changes to NewRunID cannot silently introduce
-// directory traversal or other path-injection hazards.
+// SanitizeRunIDForFilename strips any character that is not safe for use as a
+// file-system path component from id, replacing runs of unsafe characters with
+// a single '-'.
 func SanitizeRunIDForFilename(id string) string {
 	if id == "" {
 		return "run-unknown"
