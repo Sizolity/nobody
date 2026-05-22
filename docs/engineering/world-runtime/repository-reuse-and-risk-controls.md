@@ -6,6 +6,14 @@ This engineering document compares the current repository shape with the world r
 
 The goal is to avoid accidentally rebuilding the old narrative harness or coding-agent harness under new names.
 
+## Implementation Status
+
+- `internal/world/model` owns initial world runtime value types and store-safe ID validation.
+- `internal/world/store` owns the first world file-store boundary.
+- `internal/world/runtime` owns the first event-only mutation boundary.
+- `internal/narrative` remains the beat/narrative layer.
+- `internal/workspace` remains operational telemetry only.
+
 ## Risk Controls
 
 ### Risk: Three Event Logs Become Confused
