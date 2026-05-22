@@ -4,6 +4,8 @@
 
 Draft seed design for the shared narrative engine base. This document supersedes the older coding-agent assumptions in the imported migration material.
 
+`nobody` is treated as the shared core repository during this phase. Writer and Tavern are downstream products that should become separate repositories later; this design defines the core they will depend on.
+
 ## Goal
 
 Create a product-neutral **Narrative Harness** base that can later power both:
@@ -11,7 +13,7 @@ Create a product-neutral **Narrative Harness** base that can later power both:
 - **Writer Mode**: long-form fiction planning, drafting, continuity checks, and revisions.
 - **Tavern Mode**: local-first roleplay, custom worlds, persistent NPC memory, and turn-based adventures.
 
-The base must not choose either product shell first. It should define the durable substrate: world data, story graph, event log, memory records, drafts, and a beat-oriented agent loop.
+The base must not choose either product first. It should define the durable substrate: world data, story graph, event log, memory records, drafts, and a beat-oriented agent loop. Product-specific workflows, UX, prompts, and release packaging belong in future Writer and Tavern repositories.
 
 ## Design Principles
 
@@ -44,7 +46,33 @@ internal/narrative/
     agents.go       # agent interfaces and contracts
 ```
 
-The narrative packages must not import `internal/harness`. Shared logging/storage ideas can be copied or extracted later, but the narrative domain should stay independent.
+The narrative packages must not import product-shell packages. Shared workspace logging and run metadata live under `internal/workspace`; the narrative domain should stay independent from those operational concerns unless an interface is introduced.
+
+If old `nobody` packages are reused, they should either be reshaped into product-neutral support packages or copied into the narrative core with old coding-agent assumptions removed. The shared core should not preserve compatibility with the old product loop.
+
+Future product repositories should import the shared narrative API through thin public facade packages:
+
+```text
+pkg/narrative/          # public aliases for domain schemas
+pkg/narrative/agentio/  # strict model JSON output decoding helpers
+pkg/narrative/bootstrap/ # product-neutral world initialization helpers
+pkg/narrative/contract/ # public agent output validation helpers
+pkg/narrative/store/    # public Store contract and file store constructor
+pkg/narrative/engine/   # public beat engine and agent contracts
+pkg/narrative/enginetest/ # deterministic agent doubles for product tests
+pkg/narrative/id/       # public safe identifier validation
+pkg/narrative/memstore/ # public in-memory Store for tests and short-lived workflows
+pkg/narrative/prompt/   # stable context bundle JSON/prompt rendering
+pkg/narrative/snapshot/ # product UI/CLI world snapshot loader
+pkg/narrative/storetest/ # Store implementation conformance tests
+pkg/config/             # public shared model/runtime config loader
+pkg/inference/          # public inference contracts and event constants
+pkg/inference/llamacpp/ # public llama.cpp runtime constructor
+pkg/workspace/          # public event log and run metadata helpers
+pkg/skills/             # public shared capability contracts
+```
+
+`internal/narrative` remains the implementation home for now so this repository can keep evolving the core without exposing every helper as API.
 
 ## Storage Layout
 
@@ -209,6 +237,28 @@ Agents are interfaces. The first tests use fake deterministic agents.
 - Deterministic fake-agent test for one full beat.
 - Context bundle test to keep agent inputs stable.
 
+## Phase 1 Hardening
+
+The first hardening pass makes the base stricter before any product-specific mode is added:
+
+- `World`, `Character`, `Location`, `StoryGraph`, `StoryNode`, `Draft`, `NarrativeEvent`, and `Memory` validate required fields.
+- The file store rejects invalid characters, locations, events, memories, and drafts before writing them, and revalidates local-readable files after reading them.
+- The beat engine validates agent outputs before persistence, including beat plan target node references, draft/event beat IDs, memory source event references, and state graph consistency.
+- `ContextBundle` uses stable JSON field names so future prompt input tests can lock down model-facing shape.
+- Corrupt JSONL files return explicit read errors instead of being silently ignored.
+
+## Repository Transition Plan
+
+This repository is no longer treated as the long-term home of a coding-agent product. It is the staging ground for a shared narrative foundation.
+
+Near-term work:
+
+1. Finish hardening `internal/narrative` as a product-neutral core.
+2. Audit old `nobody` packages and classify them as keep, reshape, copy, or delete.
+3. Reuse only infrastructure that supports the shared core: model runtime, llama.cpp lifecycle, prompt loading, workspace layout, JSONL/event storage, and useful test harnesses.
+4. Delete old coding-agent product paths once they are confirmed unnecessary for the shared base.
+5. Keep Writer and Tavern requirements as downstream constraints, then create independent product repositories after the core APIs stabilize.
+
 ## Non-Goals
 
 - No full novel generator.
@@ -218,6 +268,7 @@ Agents are interfaces. The first tests use fake deterministic agents.
 - No remote Qwen/DeepSeek runtime yet.
 - No product-specific Writer/Tavern prompts yet.
 - No resurrection of the old coding-agent orchestrator.
+- No long-term monorepo product strategy for Writer and Tavern.
 
 ## First Implementation Slice
 
