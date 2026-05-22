@@ -17,10 +17,10 @@ type World struct {
 }
 
 func (w World) Validate() error {
-	if strings.TrimSpace(w.ID) == "" {
+	if isBlank(w.ID) {
 		return fmt.Errorf("world.id is required")
 	}
-	if strings.TrimSpace(w.Title) == "" {
+	if isBlank(w.Title) {
 		return fmt.Errorf("world.title is required")
 	}
 	return nil
@@ -36,6 +36,16 @@ type Character struct {
 	Relationships map[string]string `json:"relationships,omitempty"`
 }
 
+func (c Character) Validate() error {
+	if isBlank(c.ID) {
+		return fmt.Errorf("character.id is required")
+	}
+	if isBlank(c.Name) {
+		return fmt.Errorf("character.name is required")
+	}
+	return nil
+}
+
 type Location struct {
 	ID                   string   `json:"id"`
 	Name                 string   `json:"name"`
@@ -44,19 +54,29 @@ type Location struct {
 	ConnectedLocationIDs []string `json:"connected_location_ids,omitempty"`
 }
 
+func (l Location) Validate() error {
+	if isBlank(l.ID) {
+		return fmt.Errorf("location.id is required")
+	}
+	if isBlank(l.Name) {
+		return fmt.Errorf("location.name is required")
+	}
+	return nil
+}
+
 type StoryGraph struct {
 	CurrentNodeID string      `json:"current_node_id"`
 	Nodes         []StoryNode `json:"nodes"`
 }
 
 func (g StoryGraph) Validate() error {
-	if strings.TrimSpace(g.CurrentNodeID) == "" {
+	if isBlank(g.CurrentNodeID) {
 		return fmt.Errorf("story_graph.current_node_id is required")
 	}
 	seen := make(map[string]struct{}, len(g.Nodes))
 	for _, node := range g.Nodes {
-		if strings.TrimSpace(node.ID) == "" {
-			return fmt.Errorf("story node id is required")
+		if err := node.Validate(); err != nil {
+			return err
 		}
 		if _, ok := seen[node.ID]; ok {
 			return fmt.Errorf("duplicate story node %q", node.ID)
@@ -65,6 +85,14 @@ func (g StoryGraph) Validate() error {
 	}
 	if _, ok := seen[g.CurrentNodeID]; !ok {
 		return fmt.Errorf("story_graph.current_node_id %q does not reference a node", g.CurrentNodeID)
+	}
+	for _, node := range g.Nodes {
+		if node.ParentID == "" {
+			continue
+		}
+		if _, ok := seen[node.ParentID]; !ok {
+			return fmt.Errorf("story node %q parent_id %q does not reference a node", node.ID, node.ParentID)
+		}
 	}
 	return nil
 }
@@ -80,6 +108,22 @@ type StoryNode struct {
 	Hooks        []string `json:"hooks,omitempty"`
 }
 
+func (n StoryNode) Validate() error {
+	if isBlank(n.ID) {
+		return fmt.Errorf("story node id is required")
+	}
+	if isBlank(n.Type) {
+		return fmt.Errorf("story node type is required")
+	}
+	if isBlank(n.Status) {
+		return fmt.Errorf("story node status is required")
+	}
+	if isBlank(n.Goal) {
+		return fmt.Errorf("story node goal is required")
+	}
+	return nil
+}
+
 type NarrativeEvent struct {
 	ID             string            `json:"id"`
 	BeatID         string            `json:"beat_id"`
@@ -88,7 +132,23 @@ type NarrativeEvent struct {
 	ParticipantIDs []string          `json:"participant_ids,omitempty"`
 	Effects        map[string]string `json:"effects,omitempty"`
 	SourceText     string            `json:"source_text,omitempty"`
-	CreatedAt      time.Time         `json:"created_at,omitempty"`
+	CreatedAt      time.Time         `json:"created_at,omitempty,omitzero"`
+}
+
+func (e NarrativeEvent) Validate() error {
+	if isBlank(e.ID) {
+		return fmt.Errorf("event.id is required")
+	}
+	if isBlank(e.BeatID) {
+		return fmt.Errorf("event.beat_id is required")
+	}
+	if isBlank(e.Type) {
+		return fmt.Errorf("event.type is required")
+	}
+	if isBlank(e.Summary) {
+		return fmt.Errorf("event.summary is required")
+	}
+	return nil
 }
 
 type Memory struct {
@@ -99,7 +159,26 @@ type Memory struct {
 	Tags          []string  `json:"tags,omitempty"`
 	SourceEventID string    `json:"source_event_id,omitempty"`
 	Importance    int       `json:"importance,omitempty"`
-	CreatedAt     time.Time `json:"created_at,omitempty"`
+	CreatedAt     time.Time `json:"created_at,omitempty,omitzero"`
+}
+
+func (m Memory) Validate() error {
+	if isBlank(m.ID) {
+		return fmt.Errorf("memory.id is required")
+	}
+	if isBlank(m.Type) {
+		return fmt.Errorf("memory.type is required")
+	}
+	if isBlank(m.Subject) {
+		return fmt.Errorf("memory.subject is required")
+	}
+	if isBlank(m.Text) {
+		return fmt.Errorf("memory.text is required")
+	}
+	if m.Importance < 0 || m.Importance > 10 {
+		return fmt.Errorf("memory.importance must be between 0 and 10")
+	}
+	return nil
 }
 
 type Draft struct {
@@ -108,5 +187,28 @@ type Draft struct {
 	Title     string    `json:"title"`
 	Kind      string    `json:"kind"`
 	Text      string    `json:"text"`
-	CreatedAt time.Time `json:"created_at,omitempty"`
+	CreatedAt time.Time `json:"created_at,omitempty,omitzero"`
+}
+
+func (d Draft) Validate() error {
+	if isBlank(d.ID) {
+		return fmt.Errorf("draft.id is required")
+	}
+	if isBlank(d.BeatID) {
+		return fmt.Errorf("draft.beat_id is required")
+	}
+	if isBlank(d.Title) {
+		return fmt.Errorf("draft.title is required")
+	}
+	if isBlank(d.Kind) {
+		return fmt.Errorf("draft.kind is required")
+	}
+	if isBlank(d.Text) {
+		return fmt.Errorf("draft.text is required")
+	}
+	return nil
+}
+
+func isBlank(value string) bool {
+	return strings.TrimSpace(value) == ""
 }

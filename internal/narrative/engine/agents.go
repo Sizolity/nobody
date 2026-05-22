@@ -35,19 +35,19 @@ type StateAgent interface {
 }
 
 type ContextBundle struct {
-	World      narrative.World
-	Graph      narrative.StoryGraph
-	Characters []narrative.Character
-	Locations  []narrative.Location
-	Events     []narrative.NarrativeEvent
-	Memories   []narrative.Memory
-	Input      string
+	World      narrative.World            `json:"world"`
+	Graph      narrative.StoryGraph       `json:"graph"`
+	Characters []narrative.Character      `json:"characters"`
+	Locations  []narrative.Location       `json:"locations"`
+	Events     []narrative.NarrativeEvent `json:"events"`
+	Memories   []narrative.Memory         `json:"memories"`
+	Input      string                     `json:"input"`
 }
 
 type BeatPlan struct {
-	BeatID       string
-	Objective    string
-	TargetNodeID string
+	BeatID       string `json:"beat_id"`
+	Objective    string `json:"objective"`
+	TargetNodeID string `json:"target_node_id"`
 }
 
 type ContinuityReport struct {

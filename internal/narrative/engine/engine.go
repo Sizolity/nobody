@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/sizolity/nobody/internal/narrative"
 	"github.com/sizolity/nobody/internal/narrative/store"
@@ -43,8 +44,14 @@ func (e *Engine) RunBeat(ctx context.Context, input RunBeatInput) (RunBeatResult
 	if err != nil {
 		return RunBeatResult{}, err
 	}
+	if err := validateBeatPlan(plan, bundle.Graph); err != nil {
+		return RunBeatResult{}, err
+	}
 	draft, err := e.agents.Writer.WriteBeat(ctx, bundle, plan)
 	if err != nil {
+		return RunBeatResult{}, err
+	}
+	if err := validateDraftForPlan(draft, plan); err != nil {
 		return RunBeatResult{}, err
 	}
 	report, err := e.agents.Continuity.Check(ctx, bundle, draft)
@@ -55,9 +62,15 @@ func (e *Engine) RunBeat(ctx context.Context, input RunBeatInput) (RunBeatResult
 	if err != nil {
 		return RunBeatResult{}, err
 	}
+	if err := validateMemoryDelta(delta, plan); err != nil {
+		return RunBeatResult{}, err
+	}
 	state, err := e.agents.State.Apply(ctx, bundle, plan, delta)
 	if err != nil {
 		return RunBeatResult{}, err
+	}
+	if err := state.Graph.Validate(); err != nil {
+		return RunBeatResult{}, fmt.Errorf("state graph: %w", err)
 	}
 
 	if err := e.store.SaveDraft(ctx, input.WorldID, draft); err != nil {
@@ -89,6 +102,59 @@ func (e *Engine) RunBeat(ctx context.Context, input RunBeatInput) (RunBeatResult
 		MemoryIDs:        memoryIDs,
 		CurrentNodeID:    state.Graph.CurrentNodeID,
 	}, nil
+}
+
+func validateBeatPlan(plan BeatPlan, graph narrative.StoryGraph) error {
+	if strings.TrimSpace(plan.BeatID) == "" {
+		return fmt.Errorf("beat plan beat_id is required")
+	}
+	if strings.TrimSpace(plan.Objective) == "" {
+		return fmt.Errorf("beat plan objective is required")
+	}
+	if strings.TrimSpace(plan.TargetNodeID) == "" {
+		return fmt.Errorf("beat plan target_node_id is required")
+	}
+	for _, node := range graph.Nodes {
+		if node.ID == plan.TargetNodeID {
+			return nil
+		}
+	}
+	return fmt.Errorf("beat plan target_node_id %q does not reference a story node", plan.TargetNodeID)
+}
+
+func validateDraftForPlan(draft narrative.Draft, plan BeatPlan) error {
+	if err := draft.Validate(); err != nil {
+		return err
+	}
+	if draft.BeatID != plan.BeatID {
+		return fmt.Errorf("draft beat_id %q does not match beat plan %q", draft.BeatID, plan.BeatID)
+	}
+	return nil
+}
+
+func validateMemoryDelta(delta MemoryDelta, plan BeatPlan) error {
+	eventIDs := make(map[string]struct{}, len(delta.Events))
+	for _, event := range delta.Events {
+		if err := event.Validate(); err != nil {
+			return err
+		}
+		if event.BeatID != plan.BeatID {
+			return fmt.Errorf("event %q beat_id %q does not match beat plan %q", event.ID, event.BeatID, plan.BeatID)
+		}
+		eventIDs[event.ID] = struct{}{}
+	}
+	for _, memory := range delta.Memories {
+		if err := memory.Validate(); err != nil {
+			return err
+		}
+		if memory.SourceEventID == "" {
+			continue
+		}
+		if _, ok := eventIDs[memory.SourceEventID]; !ok {
+			return fmt.Errorf("memory %q source_event_id %q does not reference a new event", memory.ID, memory.SourceEventID)
+		}
+	}
+	return nil
 }
 
 func (e *Engine) loadContext(ctx context.Context, input RunBeatInput) (ContextBundle, error) {
