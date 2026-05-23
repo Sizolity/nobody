@@ -12,20 +12,20 @@ type RelationID string
 type FactID string
 
 type World struct {
-	ID          WorldID
-	Name        string
-	Description string
-	Canon       Canon
-	Clock       WorldClock
-	Entities    map[EntityID]Entity
-	Relations   []Relation
-	Facts       []Fact
-	Rules       []Rule
-	Threads     []WorldThread
-	EventLog    []WorldEvent
-	EventQueue  []WorldEvent
-	Memory      []MemoryRecord
-	Metadata    WorldMetadata
+	ID          WorldID             `json:"id"`
+	Name        string              `json:"name"`
+	Description string              `json:"description,omitempty"`
+	Canon       Canon               `json:"canon,omitempty"`
+	Clock       WorldClock          `json:"clock,omitempty"`
+	Entities    map[EntityID]Entity `json:"entities,omitempty"`
+	Relations   []Relation          `json:"relations,omitempty"`
+	Facts       []Fact              `json:"facts,omitempty"`
+	Rules       []Rule              `json:"rules,omitempty"`
+	Threads     []WorldThread       `json:"threads,omitempty"`
+	EventLog    []WorldEvent        `json:"event_log,omitempty"`
+	EventQueue  []WorldEvent        `json:"event_queue,omitempty"`
+	Memory      []MemoryRecord      `json:"memory,omitempty"`
+	Metadata    WorldMetadata       `json:"metadata,omitempty"`
 }
 
 func (w World) Validate() error {
@@ -39,20 +39,20 @@ func (w World) Validate() error {
 }
 
 type Canon struct {
-	Genre      []string
-	Tone       []string
-	StyleGuide []string
-	Premise    string
-	Laws       []string
-	Boundaries []string
-	Secrets    []EntityID
+	Genre      []string   `json:"genre,omitempty"`
+	Tone       []string   `json:"tone,omitempty"`
+	StyleGuide []string   `json:"style_guide,omitempty"`
+	Premise    string     `json:"premise,omitempty"`
+	Laws       []string   `json:"laws,omitempty"`
+	Boundaries []string   `json:"boundaries,omitempty"`
+	Secrets    []EntityID `json:"secrets,omitempty"`
 }
 
 type WorldClock struct {
-	Current   WorldTime
-	Calendar  string
-	TimeScale string
-	Sequence  int64
+	Current   WorldTime `json:"current,omitempty"`
+	Calendar  string    `json:"calendar,omitempty"`
+	TimeScale string    `json:"time_scale,omitempty"`
+	Sequence  int64     `json:"sequence,omitempty"`
 }
 
 type WorldTimeKind string
@@ -67,98 +67,14 @@ const (
 )
 
 type WorldTime struct {
-	Kind     WorldTimeKind
-	Tick     int64
-	Label    string
-	Calendar map[string]int
+	Kind     WorldTimeKind  `json:"kind,omitempty"`
+	Tick     int64          `json:"tick,omitempty"`
+	Label    string         `json:"label,omitempty"`
+	Calendar map[string]int `json:"calendar,omitempty"`
 }
 
 type WorldMetadata struct {
-	SchemaVersion string
-	Source        string
-	Tags          []string
-}
-
-type Value struct {
-	Kind   string
-	Raw    any
-	Unit   string
-	Source string
-}
-
-type Entity struct {
-	ID          EntityID
-	Type        string
-	Name        string
-	Description string
-	Components  map[string]any
-	State       map[string]Value
-	Tags        []string
-}
-
-type Relation struct {
-	ID       RelationID
-	Type     string
-	SourceID EntityID
-	TargetID EntityID
-}
-
-type Fact struct {
-	ID        FactID
-	SubjectID EntityID
-	Predicate string
-	Value     Value
-}
-
-type Rule struct {
-	ID      RuleID
-	Name    string
-	Kind    string
-	Enabled bool
-}
-
-type WorldThread struct {
-	ID       ThreadID
-	Kind     string
-	Title    string
-	Summary  string
-	Status   string
-	Priority float64
-	Tension  float64
-}
-
-type WorldEvent struct {
-	ID          EventID
-	Type        string
-	Source      string
-	ActorIDs    []EntityID
-	TargetIDs   []EntityID
-	LocationID  EntityID
-	Intent      string
-	Description string
-	Effects     []Effect
-}
-
-type Effect struct {
-	Kind     string
-	TargetID string
-	Payload  map[string]Value
-}
-
-type MemoryRecord struct {
-	ID         MemoryID
-	Owner      MemoryOwner
-	Scope      string
-	Kind       string
-	SubjectIDs []EntityID
-	EventIDs   []EventID
-	Content    string
-	Summary    string
-	Confidence float64
-	Importance float64
-}
-
-type MemoryOwner struct {
-	Kind string
-	ID   string
+	SchemaVersion string   `json:"schema_version,omitempty"`
+	Source        string   `json:"source,omitempty"`
+	Tags          []string `json:"tags,omitempty"`
 }

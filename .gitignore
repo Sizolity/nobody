@@ -5,6 +5,8 @@
 nobody
 nobody.exe
 coverage.out
+docs/superpowers
+docs/engineering
 
 # --- editors / IDEs ---
 .DS_Store
