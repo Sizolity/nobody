@@ -1,5 +1,7 @@
 package runtime
 
+import "github.com/sizolity/nobody/internal/world/director"
+
 type RuntimeOption func(*Runtime)
 
 func NewRuntime(options ...RuntimeOption) Runtime {
@@ -26,5 +28,11 @@ func WithoutRules() RuntimeOption {
 func WithRules(rules ...Rule) RuntimeOption {
 	return func(rt *Runtime) {
 		rt.Rules = append([]Rule(nil), rules...)
+	}
+}
+
+func WithDirectors(directors ...director.Director) RuntimeOption {
+	return func(rt *Runtime) {
+		rt.Directors = append([]director.Director(nil), directors...)
 	}
 }

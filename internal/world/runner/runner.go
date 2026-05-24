@@ -42,3 +42,21 @@ func (r Runner) ApplyEvent(ctx context.Context, worldID string, event model.Worl
 	}
 	return next, nil
 }
+
+func (r Runner) Step(ctx context.Context, worldID string) (worldruntime.StepResult, error) {
+	if r.store == nil {
+		return worldruntime.StepResult{}, fmt.Errorf("snapshot store is required")
+	}
+	world, err := r.store.LoadSnapshot(ctx, worldID)
+	if err != nil {
+		return worldruntime.StepResult{}, err
+	}
+	result, err := r.runtime.Step(world)
+	if err != nil {
+		return result, err
+	}
+	if err := r.store.SaveSnapshot(ctx, result.World); err != nil {
+		return worldruntime.StepResult{}, err
+	}
+	return result, nil
+}

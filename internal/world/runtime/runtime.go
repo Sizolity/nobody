@@ -2,14 +2,45 @@ package runtime
 
 import (
 	"fmt"
-	"maps"
 	"slices"
 
+	"github.com/sizolity/nobody/internal/world/director"
 	"github.com/sizolity/nobody/internal/world/model"
 )
 
 type Runtime struct {
-	Rules []Rule
+	Rules     []Rule
+	Directors []director.Director
+}
+
+type StepResult struct {
+	World         model.World        `json:"world"`
+	Proposals     []model.WorldEvent `json:"proposals"`
+	AppliedEvents []model.WorldEvent `json:"applied_events"`
+}
+
+func (r Runtime) Step(world model.World) (StepResult, error) {
+	result := StepResult{
+		World:         world,
+		Proposals:     []model.WorldEvent{},
+		AppliedEvents: []model.WorldEvent{},
+	}
+	for _, d := range r.Directors {
+		proposals, err := d.Propose(director.Context{World: cloneWorldForMutation(result.World)})
+		if err != nil {
+			return result, fmt.Errorf("director %q: %w", d.ID(), err)
+		}
+		result.Proposals = append(result.Proposals, proposals...)
+	}
+	for i, proposal := range result.Proposals {
+		next, err := r.ApplyEvent(result.World, proposal)
+		if err != nil {
+			return result, fmt.Errorf("proposal %d: %w", i, err)
+		}
+		result.World = next
+		result.AppliedEvents = append(result.AppliedEvents, proposal)
+	}
+	return result, nil
 }
 
 func (r Runtime) ApplyEvent(world model.World, event model.WorldEvent) (model.World, error) {
@@ -38,15 +69,15 @@ func cloneWorldForMutation(world model.World) model.World {
 	world.Canon.Laws = slices.Clone(world.Canon.Laws)
 	world.Canon.Boundaries = slices.Clone(world.Canon.Boundaries)
 	world.Canon.Secrets = slices.Clone(world.Canon.Secrets)
-	world.Clock.Current.Calendar = maps.Clone(world.Clock.Current.Calendar)
+	world.Clock.Current.Calendar = cloneIntMap(world.Clock.Current.Calendar)
 	world.Entities = cloneEntities(world.Entities)
 	world.Relations = slices.Clone(world.Relations)
-	world.Facts = slices.Clone(world.Facts)
+	world.Facts = cloneFacts(world.Facts)
 	world.Rules = slices.Clone(world.Rules)
 	world.Threads = slices.Clone(world.Threads)
-	world.EventLog = slices.Clone(world.EventLog)
-	world.EventQueue = slices.Clone(world.EventQueue)
-	world.Memory = slices.Clone(world.Memory)
+	world.EventLog = cloneEvents(world.EventLog)
+	world.EventQueue = cloneEvents(world.EventQueue)
+	world.Memory = cloneMemories(world.Memory)
 	world.Metadata.Tags = slices.Clone(world.Metadata.Tags)
 	return world
 }
@@ -57,12 +88,114 @@ func cloneEntities(entities map[model.EntityID]model.Entity) map[model.EntityID]
 	}
 	out := make(map[model.EntityID]model.Entity, len(entities))
 	for id, entity := range entities {
-		entity.Components = maps.Clone(entity.Components)
-		entity.State = maps.Clone(entity.State)
+		entity.Components = cloneAnyMap(entity.Components)
+		entity.State = cloneValueMap(entity.State)
 		entity.Tags = slices.Clone(entity.Tags)
 		out[id] = entity
 	}
 	return out
+}
+
+func cloneFacts(facts []model.Fact) []model.Fact {
+	out := slices.Clone(facts)
+	for i := range out {
+		out[i].Value = cloneValue(out[i].Value)
+	}
+	return out
+}
+
+func cloneMemories(memories []model.MemoryRecord) []model.MemoryRecord {
+	out := slices.Clone(memories)
+	for i := range out {
+		out[i].SubjectIDs = slices.Clone(out[i].SubjectIDs)
+		out[i].EventIDs = slices.Clone(out[i].EventIDs)
+	}
+	return out
+}
+
+func cloneEvents(events []model.WorldEvent) []model.WorldEvent {
+	out := slices.Clone(events)
+	for i := range out {
+		out[i].ActorIDs = slices.Clone(out[i].ActorIDs)
+		out[i].TargetIDs = slices.Clone(out[i].TargetIDs)
+		out[i].Effects = cloneEffects(out[i].Effects)
+	}
+	return out
+}
+
+func cloneEffects(effects []model.Effect) []model.Effect {
+	out := slices.Clone(effects)
+	for i := range out {
+		out[i].Payload = cloneValueMap(out[i].Payload)
+	}
+	return out
+}
+
+func cloneValueMap(in map[string]model.Value) map[string]model.Value {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]model.Value, len(in))
+	for key, value := range in {
+		out[key] = cloneValue(value)
+	}
+	return out
+}
+
+func cloneValue(value model.Value) model.Value {
+	value.Raw = cloneAny(value.Raw)
+	return value
+}
+
+func cloneAnyMap(in map[string]any) map[string]any {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]any, len(in))
+	for key, value := range in {
+		out[key] = cloneAny(value)
+	}
+	return out
+}
+
+func cloneIntMap(in map[string]int) map[string]int {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]int, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
+func cloneAny(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return cloneAnyMap(typed)
+	case map[string]string:
+		out := make(map[string]string, len(typed))
+		for key, value := range typed {
+			out[key] = value
+		}
+		return out
+	case map[string]int:
+		return cloneIntMap(typed)
+	case []any:
+		out := make([]any, len(typed))
+		for i, item := range typed {
+			out[i] = cloneAny(item)
+		}
+		return out
+	case []string:
+		return slices.Clone(typed)
+	case []int:
+		return slices.Clone(typed)
+	case []float64:
+		return slices.Clone(typed)
+	default:
+		return value
+	}
 }
 
 func (r Runtime) evaluateRules(world model.World, event model.WorldEvent) error {

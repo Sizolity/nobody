@@ -8,8 +8,10 @@ import (
 	"io"
 	"os"
 
+	"github.com/sizolity/nobody/internal/world/director"
 	"github.com/sizolity/nobody/internal/world/model"
 	"github.com/sizolity/nobody/internal/world/runner"
+	worldruntime "github.com/sizolity/nobody/internal/world/runtime"
 	"github.com/sizolity/nobody/internal/world/store"
 )
 
@@ -23,6 +25,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runInit(ctx, args[1:], stdout, stderr)
 	case "apply-event":
 		return runApplyEvent(ctx, args[1:], stdout, stderr)
+	case "step-script":
+		return runStepScript(ctx, args[1:], stdout, stderr)
 	case "show":
 		return runShow(ctx, args[1:], stdout, stderr)
 	default:
@@ -76,6 +80,36 @@ func runApplyEvent(ctx context.Context, args []string, stdout, stderr io.Writer)
 		return 1
 	}
 	fmt.Fprintf(stdout, "applied event %s to world %s\n", event.ID, world.ID)
+	return 0
+}
+
+func runStepScript(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	fs := newFlagSet("step-script", stderr)
+	workspace := fs.String("workspace", "", "workspace directory")
+	worldID := fs.String("world-id", "", "world id")
+	eventsFile := fs.String("events-file", "", "events JSON array file")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *workspace == "" || *worldID == "" || *eventsFile == "" {
+		fmt.Fprintln(stderr, "step-script requires --workspace, --world-id, and --events-file")
+		return 2
+	}
+	var events []model.WorldEvent
+	if err := readJSONFile(*eventsFile, &events); err != nil {
+		fmt.Fprintf(stderr, "read events failed: %v\n", err)
+		return 1
+	}
+	r := runner.New(
+		store.NewFileStore(*workspace),
+		worldruntime.WithDirectors(director.NewScriptDirector("cli_script", events)),
+	)
+	result, err := r.Step(ctx, *worldID)
+	if err != nil {
+		fmt.Fprintf(stderr, "step-script failed: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "applied %d events to world %s\n", len(result.AppliedEvents), result.World.ID)
 	return 0
 }
 

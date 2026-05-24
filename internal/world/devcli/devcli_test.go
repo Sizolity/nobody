@@ -152,6 +152,99 @@ func TestRunShowPrintsSnapshotJSON(t *testing.T) {
 	}
 }
 
+func TestRunStepScriptPersistsAppliedEvents(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	ctx := context.Background()
+	st := store.NewFileStore(workspace)
+	if err := st.SaveSnapshot(ctx, model.World{ID: "test_world", Name: "Test World"}); err != nil {
+		t.Fatalf("SaveSnapshot returned error: %v", err)
+	}
+	eventsPath := filepath.Join(workspace, "events.json")
+	const eventsJSON = `[
+  {
+    "id": "event_1",
+    "type": "world_fact_changed",
+    "source": "director",
+    "effects": [
+      {
+        "kind": "set_fact",
+        "target_id": "fact_1",
+        "payload": {
+          "subject_id": {"kind": "entity_ref", "raw": "tower"},
+          "predicate": {"kind": "string", "raw": "status"},
+          "value": {"kind": "string", "raw": "sealed"}
+        }
+      }
+    ]
+  }
+]`
+	if err := os.WriteFile(eventsPath, []byte(eventsJSON), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Run(ctx, []string{
+		"step-script",
+		"--workspace", workspace,
+		"--world-id", "test_world",
+		"--events-file", eventsPath,
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("Run exit code = %d, stderr=%s", code, stderr.String())
+	}
+
+	world, err := st.LoadSnapshot(ctx, "test_world")
+	if err != nil {
+		t.Fatalf("LoadSnapshot returned error: %v", err)
+	}
+	if len(world.Facts) != 1 || world.Facts[0].ID != "fact_1" {
+		t.Fatalf("fact not persisted: %#v", world.Facts)
+	}
+	if len(world.EventLog) != 1 || world.EventLog[0].ID != "event_1" {
+		t.Fatalf("event not persisted: %#v", world.EventLog)
+	}
+	if want := "applied 1 events to world test_world\n"; stdout.String() != want {
+		t.Fatalf("stdout = %q, want %q", stdout.String(), want)
+	}
+}
+
+func TestRunStepScriptDoesNotPersistFailedStep(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	ctx := context.Background()
+	st := store.NewFileStore(workspace)
+	if err := st.SaveSnapshot(ctx, model.World{ID: "test_world", Name: "Test World"}); err != nil {
+		t.Fatalf("SaveSnapshot returned error: %v", err)
+	}
+	eventsPath := filepath.Join(workspace, "events.json")
+	writeTestJSON(t, eventsPath, []model.WorldEvent{
+		{ID: "event_1", Type: model.EventTypeNote, Source: model.EventSourceDirector},
+		{ID: "event_2"},
+	})
+
+	var stdout, stderr bytes.Buffer
+	code := Run(ctx, []string{
+		"step-script",
+		"--workspace", workspace,
+		"--world-id", "test_world",
+		"--events-file", eventsPath,
+	}, &stdout, &stderr)
+	if code == 0 {
+		t.Fatalf("Run exit code = 0, want failure; stdout=%s", stdout.String())
+	}
+
+	world, err := st.LoadSnapshot(ctx, "test_world")
+	if err != nil {
+		t.Fatalf("LoadSnapshot returned error: %v", err)
+	}
+	if len(world.EventLog) != 0 {
+		t.Fatalf("failed step was persisted: %#v", world.EventLog)
+	}
+}
+
 func writeTestJSON(t *testing.T, path string, v any) {
 	t.Helper()
 	data, err := json.Marshal(v)

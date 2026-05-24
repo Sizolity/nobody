@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/sizolity/nobody/internal/world/director"
 	"github.com/sizolity/nobody/internal/world/model"
 	worldruntime "github.com/sizolity/nobody/internal/world/runtime"
 	"github.com/sizolity/nobody/internal/world/store"
@@ -111,5 +112,84 @@ func TestRunnerDoesNotSaveRejectedEvent(t *testing.T) {
 	}
 	if saved.Entities["door_1"].State != nil {
 		t.Fatalf("rejected event effects were persisted: %#v", saved.Entities["door_1"].State)
+	}
+}
+
+func TestRunnerStepAppliesDirectorProposalsAndSavesSnapshot(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := store.NewFileStore(t.TempDir())
+	initial := model.World{ID: "test_world", Name: "Test World"}
+	if err := st.SaveSnapshot(ctx, initial); err != nil {
+		t.Fatalf("SaveSnapshot returned error: %v", err)
+	}
+	r := New(
+		st,
+		worldruntime.WithoutRules(),
+		worldruntime.WithDirectors(director.NewScriptDirector("script_1", []model.WorldEvent{{
+			ID:     "event_1",
+			Type:   model.EventTypeWorldFactChanged,
+			Source: model.EventSourceDirector,
+			Effects: []model.Effect{{
+				Kind:     model.EffectSetFact,
+				TargetID: "fact_1",
+				Payload: map[string]model.Value{
+					"subject_id": {Kind: model.ValueKindEntityRef, Raw: "tower"},
+					"predicate":  {Kind: model.ValueKindString, Raw: "status"},
+					"value":      {Kind: model.ValueKindString, Raw: "sealed"},
+				},
+			}},
+		}})),
+	)
+
+	got, err := r.Step(ctx, "test_world")
+	if err != nil {
+		t.Fatalf("Step returned error: %v", err)
+	}
+	if len(got.AppliedEvents) != 1 || got.AppliedEvents[0].ID != "event_1" {
+		t.Fatalf("AppliedEvents mismatch: %#v", got.AppliedEvents)
+	}
+
+	saved, err := st.LoadSnapshot(ctx, "test_world")
+	if err != nil {
+		t.Fatalf("LoadSnapshot returned error: %v", err)
+	}
+	if len(saved.Facts) != 1 || saved.Facts[0].ID != "fact_1" {
+		t.Fatalf("fact not persisted: %#v", saved.Facts)
+	}
+	if len(saved.EventLog) != 1 || saved.EventLog[0].ID != "event_1" {
+		t.Fatalf("event log not persisted: %#v", saved.EventLog)
+	}
+}
+
+func TestRunnerStepDoesNotSaveWhenStepFails(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := store.NewFileStore(t.TempDir())
+	initial := model.World{ID: "test_world", Name: "Test World"}
+	if err := st.SaveSnapshot(ctx, initial); err != nil {
+		t.Fatalf("SaveSnapshot returned error: %v", err)
+	}
+	r := New(
+		st,
+		worldruntime.WithoutRules(),
+		worldruntime.WithDirectors(director.NewScriptDirector("script_1", []model.WorldEvent{
+			{ID: "event_1", Type: model.EventTypeNote, Source: model.EventSourceDirector},
+			{ID: "event_2"},
+		})),
+	)
+
+	if _, err := r.Step(ctx, "test_world"); err == nil {
+		t.Fatal("Step returned nil for invalid proposal")
+	}
+
+	saved, err := st.LoadSnapshot(ctx, "test_world")
+	if err != nil {
+		t.Fatalf("LoadSnapshot returned error: %v", err)
+	}
+	if len(saved.EventLog) != 0 {
+		t.Fatalf("failed step was persisted: %#v", saved.EventLog)
 	}
 }
