@@ -79,8 +79,8 @@ func validateSnapshot(world model.World) error {
 		return err
 	}
 	for id, entity := range world.Entities {
-		if err := model.ValidateID(string(entity.ID)); err != nil {
-			return fmt.Errorf("entities[%s].id: %w", id, err)
+		if err := entity.Validate(); err != nil {
+			return fmt.Errorf("entities[%s]: %w", id, err)
 		}
 	}
 	for i, relation := range world.Relations {
@@ -151,8 +151,8 @@ func (s *FileStore) SaveEntity(_ context.Context, worldID string, entity model.E
 	if err := model.ValidateID(worldID); err != nil {
 		return err
 	}
-	if err := model.ValidateID(string(entity.ID)); err != nil {
-		return fmt.Errorf("entity.id: %w", err)
+	if err := entity.Validate(); err != nil {
+		return err
 	}
 	return writeJSON(filepath.Join(s.worldDir(worldID), "entities", string(entity.ID)+".json"), entity)
 }
@@ -171,7 +171,7 @@ func (s *FileStore) LoadEntity(_ context.Context, worldID, entityID string) (mod
 	if string(entity.ID) != entityID {
 		return model.Entity{}, fmt.Errorf("entity id %q does not match path id %q", entity.ID, entityID)
 	}
-	return entity, nil
+	return entity, entity.Validate()
 }
 
 func (s *FileStore) loadEntities(_ context.Context, worldID string) (map[model.EntityID]model.Entity, error) {

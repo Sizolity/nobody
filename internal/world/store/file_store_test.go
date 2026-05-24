@@ -92,6 +92,25 @@ func TestFileStorePersistsWorldArtifacts(t *testing.T) {
 	}
 }
 
+func TestFileStoreRejectsInvalidEntityComponents(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := NewFileStore(t.TempDir())
+	entity := model.Entity{
+		ID:   "char_alice",
+		Type: "character",
+		Name: "Alice",
+		Components: map[string]any{
+			model.ComponentSpatial: map[string]any{"location_id": "../bad"},
+		},
+	}
+
+	if err := st.SaveEntity(ctx, "test_world", entity); err == nil {
+		t.Fatal("SaveEntity returned nil for invalid entity component")
+	}
+}
+
 func TestFileStorePersistsMemories(t *testing.T) {
 	t.Parallel()
 
@@ -313,6 +332,31 @@ func TestFileStoreSaveSnapshotDoesNotReplaceExistingSnapshotWhenValidationFails(
 	}
 	if _, ok := got.Entities["villain"]; ok {
 		t.Fatalf("invalid snapshot entity was persisted: %#v", got.Entities)
+	}
+}
+
+func TestFileStoreSaveSnapshotRejectsInvalidEntityComponents(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := NewFileStore(t.TempDir())
+	world := model.World{
+		ID:   "test_world",
+		Name: "Test World",
+		Entities: map[model.EntityID]model.Entity{
+			"char_alice": {
+				ID:   "char_alice",
+				Type: "character",
+				Name: "Alice",
+				Components: map[string]any{
+					model.ComponentInventory: map[string]any{"item_ids": []any{"key_1", "../bad"}},
+				},
+			},
+		},
+	}
+
+	if err := st.SaveSnapshot(ctx, world); err == nil {
+		t.Fatal("SaveSnapshot returned nil for invalid entity component")
 	}
 }
 
