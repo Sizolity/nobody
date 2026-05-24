@@ -179,6 +179,30 @@ func TestWorldEventValidateAcceptsMemoryEffects(t *testing.T) {
 	}
 }
 
+func TestWorldEventValidateAcceptsReconcileMemoryEffect(t *testing.T) {
+	event := WorldEvent{
+		ID:     "event_1",
+		Type:   EventTypeRemember,
+		Source: EventSourceTest,
+		Effects: []Effect{{
+			Kind:     EffectReconcileMemory,
+			TargetID: "memory_1",
+			Payload: map[string]Value{
+				"truth_status":     {Kind: ValueKindString, Raw: TruthStatusDisputed},
+				"confidence_delta": {Kind: ValueKindNumber, Raw: -0.4},
+				"add_memory_id":    {Kind: ValueKindString, Raw: "memory_2"},
+				"add_memory_content": {
+					Kind: ValueKindString,
+					Raw:  "I may have been wrong about A.",
+				},
+			},
+		}},
+	}
+	if err := event.Validate(); err != nil {
+		t.Fatalf("Validate returned error: %v", err)
+	}
+}
+
 func TestWorldThreadValidateRequiresIDAndTitle(t *testing.T) {
 	thread := WorldThread{Kind: ThreadKindMystery, Title: "Find the killer"}
 	if err := thread.Validate(); err == nil {

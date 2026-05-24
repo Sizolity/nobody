@@ -227,6 +227,8 @@ func applyEffect(world model.World, effect model.Effect) (model.World, error) {
 		return applyAddMemory(world, effect)
 	case model.EffectReviseMemory:
 		return applyReviseMemory(world, effect)
+	case model.EffectReconcileMemory:
+		return applyReconcileMemory(world, effect)
 	case model.EffectOpenThread:
 		return applyOpenThread(world, effect)
 	case model.EffectUpdateThread:
@@ -362,6 +364,86 @@ func applyReviseMemory(world model.World, effect model.Effect) (model.World, err
 		return world, nil
 	}
 	return model.World{}, fmt.Errorf("memory %q not found", effect.TargetID)
+}
+
+func applyReconcileMemory(world model.World, effect model.Effect) (model.World, error) {
+	for i, memory := range world.Memory {
+		if string(memory.ID) != effect.TargetID {
+			continue
+		}
+		if value := payloadOptionalString(effect, "content"); value != "" {
+			memory.Content = value
+		}
+		if value := payloadOptionalString(effect, "summary"); value != "" {
+			memory.Summary = value
+		}
+		if value := payloadOptionalString(effect, "truth_status"); value != "" {
+			memory.TruthStatus = value
+		}
+		if _, ok := effect.Payload["confidence_delta"]; ok {
+			memory.Confidence = clamp01(memory.Confidence + payloadOptionalFloat(effect, "confidence_delta"))
+		}
+		if err := memory.Validate(); err != nil {
+			return model.World{}, err
+		}
+		world.Memory[i] = memory
+		if newMemory, ok, err := reconciliationMemoryFromPayload(effect, memory); err != nil {
+			return model.World{}, err
+		} else if ok {
+			world.Memory = append(world.Memory, newMemory)
+		}
+		return world, nil
+	}
+	return model.World{}, fmt.Errorf("memory %q not found", effect.TargetID)
+}
+
+func reconciliationMemoryFromPayload(effect model.Effect, reconciled model.MemoryRecord) (model.MemoryRecord, bool, error) {
+	id := payloadOptionalString(effect, "add_memory_id")
+	content := payloadOptionalString(effect, "add_memory_content")
+	if id == "" && content == "" {
+		return model.MemoryRecord{}, false, nil
+	}
+	if id == "" {
+		return model.MemoryRecord{}, false, fmt.Errorf("payload.add_memory_id is required when add_memory_content is set")
+	}
+	if content == "" {
+		return model.MemoryRecord{}, false, fmt.Errorf("payload.add_memory_content is required when add_memory_id is set")
+	}
+	memory := model.MemoryRecord{
+		ID:          model.MemoryID(id),
+		Owner:       reconciled.Owner,
+		Scope:       reconciled.Scope,
+		Kind:        model.MemoryKindBelief,
+		SubjectIDs:  slices.Clone(reconciled.SubjectIDs),
+		EventIDs:    slices.Clone(reconciled.EventIDs),
+		Content:     content,
+		TruthStatus: model.TruthStatusUnknown,
+		Confidence:  0.5,
+		Importance:  reconciled.Importance,
+	}
+	if value := payloadOptionalString(effect, "add_memory_truth_status"); value != "" {
+		memory.TruthStatus = value
+	}
+	if _, ok := effect.Payload["add_memory_confidence"]; ok {
+		memory.Confidence = clamp01(payloadOptionalFloat(effect, "add_memory_confidence"))
+	}
+	if _, ok := effect.Payload["add_memory_importance"]; ok {
+		memory.Importance = clamp01(payloadOptionalFloat(effect, "add_memory_importance"))
+	}
+	if err := memory.Validate(); err != nil {
+		return model.MemoryRecord{}, false, err
+	}
+	return memory, true, nil
+}
+
+func clamp01(value float64) float64 {
+	if value < 0 {
+		return 0
+	}
+	if value > 1 {
+		return 1
+	}
+	return value
 }
 
 func applyOpenThread(world model.World, effect model.Effect) (model.World, error) {

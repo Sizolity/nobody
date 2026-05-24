@@ -123,6 +123,90 @@ func TestRunApplyEventAcceptsSnakeCaseEventJSON(t *testing.T) {
 	}
 }
 
+func TestRunApplyEventPersistsReconciledMemory(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	ctx := context.Background()
+	st := store.NewFileStore(workspace)
+	initial := model.World{
+		ID:   "test_world",
+		Name: "Test World",
+		Memory: []model.MemoryRecord{{
+			ID:          "memory_1",
+			Owner:       model.MemoryOwner{Kind: model.MemoryOwnerKindCharacter, ID: "char_c"},
+			Scope:       model.MemoryScopeSubjective,
+			Kind:        model.MemoryKindBelief,
+			Content:     "A killed the king.",
+			TruthStatus: model.TruthStatusUnknown,
+			Confidence:  0.8,
+			Importance:  0.7,
+		}},
+	}
+	if err := st.SaveSnapshot(ctx, initial); err != nil {
+		t.Fatalf("SaveSnapshot returned error: %v", err)
+	}
+	eventPath := filepath.Join(workspace, "event.json")
+	const eventJSON = `{
+  "id": "event_reconcile_1",
+  "type": "remember",
+  "source": "test",
+  "effects": [
+    {
+      "kind": "reconcile_memory",
+      "target_id": "memory_1",
+      "payload": {
+        "truth_status": {"kind": "string", "raw": "disputed"},
+        "confidence_delta": {"kind": "number", "raw": -0.5},
+        "summary": {"kind": "string", "raw": "New evidence disputes C's old belief."},
+        "add_memory_id": {"kind": "string", "raw": "memory_2"},
+        "add_memory_content": {"kind": "string", "raw": "C starts to suspect A was framed."}
+      }
+    }
+  ]
+}`
+	if err := os.WriteFile(eventPath, []byte(eventJSON), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Run(ctx, []string{
+		"apply-event",
+		"--workspace", workspace,
+		"--world-id", "test_world",
+		"--event-file", eventPath,
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("Run exit code = %d, stderr=%s", code, stderr.String())
+	}
+
+	world, err := st.LoadSnapshot(ctx, "test_world")
+	if err != nil {
+		t.Fatalf("LoadSnapshot returned error: %v", err)
+	}
+	if len(world.Memory) != 2 {
+		t.Fatalf("Memory length = %d, want 2: %#v", len(world.Memory), world.Memory)
+	}
+	if world.Memory[0].TruthStatus != model.TruthStatusDisputed {
+		t.Fatalf("memory truth status not reconciled: %#v", world.Memory[0])
+	}
+	if world.Memory[0].Confidence < 0.299999 || world.Memory[0].Confidence > 0.300001 {
+		t.Fatalf("memory confidence = %v, want 0.3", world.Memory[0].Confidence)
+	}
+	if world.Memory[0].Summary != "New evidence disputes C's old belief." {
+		t.Fatalf("memory summary not reconciled: %#v", world.Memory[0])
+	}
+	if world.Memory[1].ID != "memory_2" || world.Memory[1].Owner.ID != "char_c" {
+		t.Fatalf("follow-up memory mismatch: %#v", world.Memory[1])
+	}
+	if world.Memory[1].Content != "C starts to suspect A was framed." {
+		t.Fatalf("follow-up memory content mismatch: %#v", world.Memory[1])
+	}
+	if len(world.EventLog) != 1 || world.EventLog[0].ID != "event_reconcile_1" {
+		t.Fatalf("reconcile event not persisted: %#v", world.EventLog)
+	}
+}
+
 func TestRunShowPrintsSnapshotJSON(t *testing.T) {
 	t.Parallel()
 

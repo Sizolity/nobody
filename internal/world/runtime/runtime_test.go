@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"math"
 	"testing"
 
 	"github.com/sizolity/nobody/internal/world/model"
@@ -215,6 +216,151 @@ func TestRuntimeRejectsReviseMissingMemory(t *testing.T) {
 			TargetID: "missing_memory",
 			Payload: map[string]model.Value{
 				"confidence": {Kind: model.ValueKindNumber, Raw: 0.4},
+			},
+		}},
+	}
+
+	if _, err := rt.ApplyEvent(world, event); err == nil {
+		t.Fatal("ApplyEvent returned nil for missing memory")
+	}
+}
+
+func TestRuntimeAppliesReconcileMemoryEffect(t *testing.T) {
+	t.Parallel()
+
+	rt := Runtime{}
+	world := model.World{
+		ID:   "test_world",
+		Name: "Test World",
+		Memory: []model.MemoryRecord{{
+			ID:          "memory_1",
+			Owner:       model.MemoryOwner{Kind: model.MemoryOwnerKindCharacter, ID: "char_c"},
+			Scope:       model.MemoryScopeSubjective,
+			Kind:        model.MemoryKindBelief,
+			Content:     "A killed the king.",
+			TruthStatus: model.TruthStatusUnknown,
+			Confidence:  0.8,
+			Importance:  0.7,
+		}},
+	}
+	event := model.WorldEvent{
+		ID:     "event_1",
+		Type:   model.EventTypeRemember,
+		Source: model.EventSourceTest,
+		Effects: []model.Effect{{
+			Kind:     model.EffectReconcileMemory,
+			TargetID: "memory_1",
+			Payload: map[string]model.Value{
+				"truth_status":     {Kind: model.ValueKindString, Raw: model.TruthStatusDisputed},
+				"confidence_delta": {Kind: model.ValueKindNumber, Raw: -0.5},
+				"summary":          {Kind: model.ValueKindString, Raw: "New evidence disputes C's old belief."},
+				"add_memory_id":    {Kind: model.ValueKindString, Raw: "memory_2"},
+				"add_memory_content": {
+					Kind: model.ValueKindString,
+					Raw:  "C starts to suspect A was framed.",
+				},
+			},
+		}},
+	}
+
+	got, err := rt.ApplyEvent(world, event)
+	if err != nil {
+		t.Fatalf("ApplyEvent returned error: %v", err)
+	}
+	if len(got.Memory) != 2 {
+		t.Fatalf("Memory length = %d, want 2: %#v", len(got.Memory), got.Memory)
+	}
+	if got.Memory[0].TruthStatus != model.TruthStatusDisputed {
+		t.Fatalf("truth status not reconciled: %#v", got.Memory[0])
+	}
+	if math.Abs(got.Memory[0].Confidence-0.3) > 0.000001 {
+		t.Fatalf("confidence = %v, want 0.3: %#v", got.Memory[0].Confidence, got.Memory[0])
+	}
+	if got.Memory[0].Summary != "New evidence disputes C's old belief." {
+		t.Fatalf("summary not updated: %#v", got.Memory[0])
+	}
+	if got.Memory[1].ID != "memory_2" || got.Memory[1].Owner.ID != "char_c" {
+		t.Fatalf("reconciliation memory owner mismatch: %#v", got.Memory[1])
+	}
+	if got.Memory[1].Content != "C starts to suspect A was framed." {
+		t.Fatalf("reconciliation memory content mismatch: %#v", got.Memory[1])
+	}
+	if got.Memory[1].TruthStatus != model.TruthStatusUnknown || got.Memory[1].Confidence != 0.5 {
+		t.Fatalf("unexpected reconciliation memory defaults: %#v", got.Memory[1])
+	}
+}
+
+func TestRuntimeReconcileMemoryClampsConfidence(t *testing.T) {
+	t.Parallel()
+
+	rt := Runtime{}
+	world := model.World{
+		ID:   "test_world",
+		Name: "Test World",
+		Memory: []model.MemoryRecord{{
+			ID:          "memory_1",
+			Owner:       model.MemoryOwner{Kind: model.MemoryOwnerKindCharacter, ID: "char_c"},
+			Scope:       model.MemoryScopeSubjective,
+			Kind:        model.MemoryKindBelief,
+			Content:     "A killed the king.",
+			TruthStatus: model.TruthStatusUnknown,
+			Confidence:  0.2,
+		}},
+	}
+
+	low, err := rt.ApplyEvent(world, model.WorldEvent{
+		ID:     "event_1",
+		Type:   model.EventTypeRemember,
+		Source: model.EventSourceTest,
+		Effects: []model.Effect{{
+			Kind:     model.EffectReconcileMemory,
+			TargetID: "memory_1",
+			Payload: map[string]model.Value{
+				"confidence_delta": {Kind: model.ValueKindNumber, Raw: -0.8},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("low confidence ApplyEvent returned error: %v", err)
+	}
+	if low.Memory[0].Confidence != 0 {
+		t.Fatalf("low confidence = %v, want 0", low.Memory[0].Confidence)
+	}
+
+	high, err := rt.ApplyEvent(world, model.WorldEvent{
+		ID:     "event_2",
+		Type:   model.EventTypeRemember,
+		Source: model.EventSourceTest,
+		Effects: []model.Effect{{
+			Kind:     model.EffectReconcileMemory,
+			TargetID: "memory_1",
+			Payload: map[string]model.Value{
+				"confidence_delta": {Kind: model.ValueKindNumber, Raw: 1.4},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("high confidence ApplyEvent returned error: %v", err)
+	}
+	if high.Memory[0].Confidence != 1 {
+		t.Fatalf("high confidence = %v, want 1", high.Memory[0].Confidence)
+	}
+}
+
+func TestRuntimeRejectsReconcileMissingMemory(t *testing.T) {
+	t.Parallel()
+
+	rt := Runtime{}
+	world := model.World{ID: "test_world", Name: "Test World"}
+	event := model.WorldEvent{
+		ID:     "event_1",
+		Type:   model.EventTypeRemember,
+		Source: model.EventSourceTest,
+		Effects: []model.Effect{{
+			Kind:     model.EffectReconcileMemory,
+			TargetID: "missing_memory",
+			Payload: map[string]model.Value{
+				"confidence_delta": {Kind: model.ValueKindNumber, Raw: -0.4},
 			},
 		}},
 	}
