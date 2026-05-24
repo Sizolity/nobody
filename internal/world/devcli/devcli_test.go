@@ -329,6 +329,80 @@ func TestRunStepScriptDoesNotPersistFailedStep(t *testing.T) {
 	}
 }
 
+func TestRunStepReconcilePersistsConfiguredCases(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	ctx := context.Background()
+	st := store.NewFileStore(workspace)
+	initial := model.World{
+		ID:   "test_world",
+		Name: "Test World",
+		Memory: []model.MemoryRecord{{
+			ID:          "memory_1",
+			Owner:       model.MemoryOwner{Kind: model.MemoryOwnerKindCharacter, ID: "char_c"},
+			Scope:       model.MemoryScopeSubjective,
+			Kind:        model.MemoryKindBelief,
+			Content:     "A killed the king.",
+			TruthStatus: model.TruthStatusUnknown,
+			Confidence:  0.8,
+		}},
+	}
+	if err := st.SaveSnapshot(ctx, initial); err != nil {
+		t.Fatalf("SaveSnapshot returned error: %v", err)
+	}
+	casesPath := filepath.Join(workspace, "reconcile_cases.json")
+	const casesJSON = `[
+  {
+    "event_id": "event_reconcile_1",
+    "target_memory_id": "memory_1",
+    "when_truth_status": "unknown",
+    "truth_status": "disputed",
+    "confidence_delta": -0.5,
+    "summary": "New evidence disputes C's old belief.",
+    "add_memory_id": "memory_2",
+    "add_memory_content": "C starts to suspect A was framed."
+  }
+]`
+	if err := os.WriteFile(casesPath, []byte(casesJSON), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Run(ctx, []string{
+		"step-reconcile",
+		"--workspace", workspace,
+		"--world-id", "test_world",
+		"--cases-file", casesPath,
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("Run exit code = %d, stderr=%s", code, stderr.String())
+	}
+
+	world, err := st.LoadSnapshot(ctx, "test_world")
+	if err != nil {
+		t.Fatalf("LoadSnapshot returned error: %v", err)
+	}
+	if len(world.Memory) != 2 {
+		t.Fatalf("Memory length = %d, want 2: %#v", len(world.Memory), world.Memory)
+	}
+	if world.Memory[0].TruthStatus != model.TruthStatusDisputed {
+		t.Fatalf("memory truth status not reconciled: %#v", world.Memory[0])
+	}
+	if world.Memory[0].Confidence < 0.299999 || world.Memory[0].Confidence > 0.300001 {
+		t.Fatalf("memory confidence = %v, want 0.3", world.Memory[0].Confidence)
+	}
+	if world.Memory[1].ID != "memory_2" || world.Memory[1].Content != "C starts to suspect A was framed." {
+		t.Fatalf("follow-up memory mismatch: %#v", world.Memory[1])
+	}
+	if len(world.EventLog) != 1 || world.EventLog[0].ID != "event_reconcile_1" {
+		t.Fatalf("reconcile event not persisted: %#v", world.EventLog)
+	}
+	if want := "applied 1 reconciliation events to world test_world\n"; stdout.String() != want {
+		t.Fatalf("stdout = %q, want %q", stdout.String(), want)
+	}
+}
+
 func writeTestJSON(t *testing.T, path string, v any) {
 	t.Helper()
 	data, err := json.Marshal(v)

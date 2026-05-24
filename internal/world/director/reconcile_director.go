@@ -3,14 +3,14 @@ package director
 import "github.com/sizolity/nobody/internal/world/model"
 
 type ReconcileCase struct {
-	EventID          model.EventID
-	TargetMemoryID   model.MemoryID
-	WhenTruthStatus  string
-	TruthStatus      string
-	ConfidenceDelta  float64
-	Summary          string
-	AddMemoryID      model.MemoryID
-	AddMemoryContent string
+	EventID          model.EventID  `json:"event_id"`
+	TargetMemoryID   model.MemoryID `json:"target_memory_id"`
+	WhenTruthStatus  string         `json:"when_truth_status,omitempty"`
+	TruthStatus      string         `json:"truth_status,omitempty"`
+	ConfidenceDelta  float64        `json:"confidence_delta,omitempty"`
+	Summary          string         `json:"summary,omitempty"`
+	AddMemoryID      model.MemoryID `json:"add_memory_id,omitempty"`
+	AddMemoryContent string         `json:"add_memory_content,omitempty"`
 }
 
 type ReconcileDirector struct {

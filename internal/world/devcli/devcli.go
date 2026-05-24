@@ -27,6 +27,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runApplyEvent(ctx, args[1:], stdout, stderr)
 	case "step-script":
 		return runStepScript(ctx, args[1:], stdout, stderr)
+	case "step-reconcile":
+		return runStepReconcile(ctx, args[1:], stdout, stderr)
 	case "show":
 		return runShow(ctx, args[1:], stdout, stderr)
 	default:
@@ -110,6 +112,36 @@ func runStepScript(ctx context.Context, args []string, stdout, stderr io.Writer)
 		return 1
 	}
 	fmt.Fprintf(stdout, "applied %d events to world %s\n", len(result.AppliedEvents), result.World.ID)
+	return 0
+}
+
+func runStepReconcile(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	fs := newFlagSet("step-reconcile", stderr)
+	workspace := fs.String("workspace", "", "workspace directory")
+	worldID := fs.String("world-id", "", "world id")
+	casesFile := fs.String("cases-file", "", "reconcile cases JSON array file")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *workspace == "" || *worldID == "" || *casesFile == "" {
+		fmt.Fprintln(stderr, "step-reconcile requires --workspace, --world-id, and --cases-file")
+		return 2
+	}
+	var cases []director.ReconcileCase
+	if err := readJSONFile(*casesFile, &cases); err != nil {
+		fmt.Fprintf(stderr, "read reconcile cases failed: %v\n", err)
+		return 1
+	}
+	r := runner.New(
+		store.NewFileStore(*workspace),
+		worldruntime.WithDirectors(director.NewReconcileDirector("cli_reconcile", cases)),
+	)
+	result, err := r.Step(ctx, *worldID)
+	if err != nil {
+		fmt.Fprintf(stderr, "step-reconcile failed: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "applied %d reconciliation events to world %s\n", len(result.AppliedEvents), result.World.ID)
 	return 0
 }
 

@@ -1,6 +1,7 @@
 package director
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/sizolity/nobody/internal/world/model"
@@ -120,6 +121,46 @@ func TestReconcileDirectorDoesNotAliasReturnedProposals(t *testing.T) {
 	}
 	if second[0].Effects[0].Payload["summary"].Raw != "Original summary." {
 		t.Fatalf("proposal payload was mutated: %#v", second[0].Effects[0].Payload)
+	}
+}
+
+func TestReconcileCaseUnmarshalsSnakeCaseJSON(t *testing.T) {
+	t.Parallel()
+
+	const raw = `[
+  {
+    "event_id": "event_reconcile_1",
+    "target_memory_id": "memory_1",
+    "when_truth_status": "unknown",
+    "truth_status": "disputed",
+    "confidence_delta": -0.4,
+    "summary": "New evidence disputes this belief.",
+    "add_memory_id": "memory_2",
+    "add_memory_content": "I may have been wrong."
+  }
+]`
+	var cases []ReconcileCase
+	if err := json.Unmarshal([]byte(raw), &cases); err != nil {
+		t.Fatalf("Unmarshal returned error: %v", err)
+	}
+	if len(cases) != 1 {
+		t.Fatalf("cases count = %d, want 1", len(cases))
+	}
+	got := cases[0]
+	if got.EventID != "event_reconcile_1" {
+		t.Fatalf("EventID = %q, want event_reconcile_1", got.EventID)
+	}
+	if got.TargetMemoryID != "memory_1" {
+		t.Fatalf("TargetMemoryID = %q, want memory_1", got.TargetMemoryID)
+	}
+	if got.WhenTruthStatus != model.TruthStatusUnknown || got.TruthStatus != model.TruthStatusDisputed {
+		t.Fatalf("truth status fields mismatch: %#v", got)
+	}
+	if got.ConfidenceDelta != -0.4 {
+		t.Fatalf("ConfidenceDelta = %v, want -0.4", got.ConfidenceDelta)
+	}
+	if got.AddMemoryID != "memory_2" || got.AddMemoryContent != "I may have been wrong." {
+		t.Fatalf("add memory fields mismatch: %#v", got)
 	}
 }
 
