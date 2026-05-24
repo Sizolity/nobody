@@ -132,3 +132,75 @@ func TestEntityValidateRejectsInvalidComponentFields(t *testing.T) {
 		})
 	}
 }
+
+func TestEntityComponentBuildersProduceValidComponents(t *testing.T) {
+	t.Parallel()
+
+	entity := Entity{
+		ID:   "char_alice",
+		Type: "character",
+		Name: "Alice",
+		Components: map[string]any{
+			ComponentProfile:   NewProfileComponent("Alice", "A careful investigator."),
+			ComponentActor:     NewActorComponent(true, []string{"find the truth"}),
+			ComponentSpatial:   NewSpatialComponent("tower"),
+			ComponentInventory: NewInventoryComponent("key_1", "map_1"),
+			ComponentStats: NewStatsComponent(map[string]Value{
+				"strength": {Kind: ValueKindNumber, Raw: float64(3)},
+			}),
+		},
+	}
+
+	if err := entity.Validate(); err != nil {
+		t.Fatalf("Validate returned error: %v", err)
+	}
+}
+
+func TestEntityComponentBuildersCopyInputs(t *testing.T) {
+	t.Parallel()
+
+	goals := []string{"find the truth"}
+	itemIDs := []EntityID{"key_1"}
+	stats := map[string]Value{
+		"strength": {Kind: ValueKindNumber, Raw: float64(3)},
+	}
+
+	actor := NewActorComponent(true, goals)
+	inventory := NewInventoryComponent(itemIDs...)
+	statsComponent := NewStatsComponent(stats)
+
+	goals[0] = "changed"
+	itemIDs[0] = "changed"
+	stats["strength"] = Value{Kind: ValueKindNumber, Raw: float64(99)}
+
+	if actor["goals"].([]string)[0] != "find the truth" {
+		t.Fatalf("actor goals aliased input slice: %#v", actor)
+	}
+	if inventory["item_ids"].([]string)[0] != "key_1" {
+		t.Fatalf("inventory item_ids aliased input slice: %#v", inventory)
+	}
+	if statsComponent["values"].(map[string]Value)["strength"].Raw != float64(3) {
+		t.Fatalf("stats values aliased input map: %#v", statsComponent)
+	}
+}
+
+func TestEntityValidateAcceptsStatsValueMap(t *testing.T) {
+	t.Parallel()
+
+	entity := Entity{
+		ID:   "char_alice",
+		Type: "character",
+		Name: "Alice",
+		Components: map[string]any{
+			ComponentStats: map[string]any{
+				"values": map[string]Value{
+					"strength": {Kind: ValueKindNumber, Raw: float64(3)},
+				},
+			},
+		},
+	}
+
+	if err := entity.Validate(); err != nil {
+		t.Fatalf("Validate returned error: %v", err)
+	}
+}

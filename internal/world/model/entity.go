@@ -105,7 +105,9 @@ func validateInventoryComponent(data map[string]any) error {
 
 func validateStatsComponent(data map[string]any) error {
 	if value, ok := data["values"]; ok {
-		if _, ok := value.(map[string]any); !ok {
+		switch value.(type) {
+		case map[string]any, map[string]Value:
+		default:
 			return fmt.Errorf("values must be an object")
 		}
 	}
@@ -147,4 +149,46 @@ func stringList(value any) ([]string, error) {
 	default:
 		return nil, fmt.Errorf("must be a string list")
 	}
+}
+
+func NewProfileComponent(name, description string) map[string]any {
+	component := map[string]any{}
+	if name != "" {
+		component["name"] = name
+	}
+	if description != "" {
+		component["description"] = description
+	}
+	return component
+}
+
+func NewActorComponent(canAct bool, goals []string) map[string]any {
+	return map[string]any{
+		"can_act": canAct,
+		"goals":   append([]string(nil), goals...),
+	}
+}
+
+func NewSpatialComponent(locationID EntityID) map[string]any {
+	component := map[string]any{}
+	if locationID != "" {
+		component["location_id"] = string(locationID)
+	}
+	return component
+}
+
+func NewInventoryComponent(itemIDs ...EntityID) map[string]any {
+	ids := make([]string, len(itemIDs))
+	for i, id := range itemIDs {
+		ids[i] = string(id)
+	}
+	return map[string]any{"item_ids": ids}
+}
+
+func NewStatsComponent(values map[string]Value) map[string]any {
+	out := make(map[string]Value, len(values))
+	for key, value := range values {
+		out[key] = value
+	}
+	return map[string]any{"values": out}
 }
