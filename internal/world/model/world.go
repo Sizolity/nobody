@@ -1,6 +1,9 @@
 package model
 
-import "fmt"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 type WorldID string
 type EntityID string
@@ -23,7 +26,7 @@ type World struct {
 	Rules       []Rule              `json:"rules,omitempty"`
 	Threads     []WorldThread       `json:"threads,omitempty"`
 	EventLog    []WorldEvent        `json:"event_log,omitempty"`
-	EventQueue  []WorldEvent        `json:"event_queue,omitempty"`
+	EventQueue  []EventQueueItem    `json:"event_queue,omitempty"`
 	Memory      []MemoryRecord      `json:"memory,omitempty"`
 	Metadata    WorldMetadata       `json:"metadata,omitempty"`
 }
@@ -77,4 +80,39 @@ type WorldMetadata struct {
 	SchemaVersion string   `json:"schema_version,omitempty"`
 	Source        string   `json:"source,omitempty"`
 	Tags          []string `json:"tags,omitempty"`
+}
+
+type EventQueueItem struct {
+	Event     WorldEvent `json:"event"`
+	Priority  int        `json:"priority,omitempty"`
+	NotBefore WorldTime  `json:"not_before,omitempty"`
+	CreatedBy string     `json:"created_by,omitempty"`
+}
+
+func (i EventQueueItem) Validate() error {
+	if err := i.Event.Validate(); err != nil {
+		return fmt.Errorf("event: %w", err)
+	}
+	if i.CreatedBy != "" {
+		if err := ValidateID(i.CreatedBy); err != nil {
+			return fmt.Errorf("created_by: %w", err)
+		}
+	}
+	return nil
+}
+
+func (i *EventQueueItem) UnmarshalJSON(data []byte) error {
+	type eventQueueItem EventQueueItem
+	var item eventQueueItem
+	if err := json.Unmarshal(data, &item); err == nil && item.Event.ID != "" {
+		*i = EventQueueItem(item)
+		return nil
+	}
+
+	var event WorldEvent
+	if err := json.Unmarshal(data, &event); err != nil {
+		return err
+	}
+	*i = EventQueueItem{Event: event}
+	return nil
 }

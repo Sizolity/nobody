@@ -202,9 +202,9 @@ func TestRunnerStepConsumesQueueAndSavesRemainingQueue(t *testing.T) {
 	initial := model.World{
 		ID:   "test_world",
 		Name: "Test World",
-		EventQueue: []model.WorldEvent{
-			{ID: "event_queued_1", Type: model.EventTypeNote, Source: model.EventSourceRuntime},
-			{ID: "event_queued_2", Type: model.EventTypeNote, Source: model.EventSourceRuntime},
+		EventQueue: []model.EventQueueItem{
+			{Event: model.WorldEvent{ID: "event_queued_1", Type: model.EventTypeNote, Source: model.EventSourceRuntime}},
+			{Event: model.WorldEvent{ID: "event_queued_2", Type: model.EventTypeNote, Source: model.EventSourceRuntime}},
 		},
 	}
 	if err := st.SaveSnapshot(ctx, initial); err != nil {
@@ -227,7 +227,7 @@ func TestRunnerStepConsumesQueueAndSavesRemainingQueue(t *testing.T) {
 	if len(saved.EventLog) != 1 || saved.EventLog[0].ID != "event_queued_1" {
 		t.Fatalf("event log not persisted: %#v", saved.EventLog)
 	}
-	if len(saved.EventQueue) != 1 || saved.EventQueue[0].ID != "event_queued_2" {
+	if len(saved.EventQueue) != 1 || saved.EventQueue[0].Event.ID != "event_queued_2" {
 		t.Fatalf("remaining queue not persisted: %#v", saved.EventQueue)
 	}
 }

@@ -74,10 +74,12 @@ func TestRuntimeStepDoesNotConsumeEventQueueByDefault(t *testing.T) {
 	world := model.World{
 		ID:   "world_1",
 		Name: "World",
-		EventQueue: []model.WorldEvent{{
-			ID:     "event_queued",
-			Type:   model.EventTypeNote,
-			Source: model.EventSourceRuntime,
+		EventQueue: []model.EventQueueItem{{
+			Event: model.WorldEvent{
+				ID:     "event_queued",
+				Type:   model.EventTypeNote,
+				Source: model.EventSourceRuntime,
+			},
 		}},
 	}
 
@@ -85,7 +87,7 @@ func TestRuntimeStepDoesNotConsumeEventQueueByDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Step returned error: %v", err)
 	}
-	if len(got.World.EventQueue) != 1 || got.World.EventQueue[0].ID != "event_queued" {
+	if len(got.World.EventQueue) != 1 || got.World.EventQueue[0].Event.ID != "event_queued" {
 		t.Fatalf("queue should remain untouched by default: %#v", got.World.EventQueue)
 	}
 	if len(got.AppliedEvents) != 0 {
@@ -99,9 +101,9 @@ func TestRuntimeStepConsumesEventQueueWithLimit(t *testing.T) {
 	world := model.World{
 		ID:   "world_1",
 		Name: "World",
-		EventQueue: []model.WorldEvent{
-			{ID: "event_queued_1", Type: model.EventTypeNote, Source: model.EventSourceRuntime},
-			{ID: "event_queued_2", Type: model.EventTypeNote, Source: model.EventSourceRuntime},
+		EventQueue: []model.EventQueueItem{
+			{Event: model.WorldEvent{ID: "event_queued_1", Type: model.EventTypeNote, Source: model.EventSourceRuntime}},
+			{Event: model.WorldEvent{ID: "event_queued_2", Type: model.EventTypeNote, Source: model.EventSourceRuntime}},
 		},
 	}
 
@@ -115,8 +117,60 @@ func TestRuntimeStepConsumesEventQueueWithLimit(t *testing.T) {
 	if len(got.World.EventLog) != 1 || got.World.EventLog[0].ID != "event_queued_1" {
 		t.Fatalf("queued event was not logged: %#v", got.World.EventLog)
 	}
-	if len(got.World.EventQueue) != 1 || got.World.EventQueue[0].ID != "event_queued_2" {
+	if len(got.World.EventQueue) != 1 || got.World.EventQueue[0].Event.ID != "event_queued_2" {
 		t.Fatalf("queue was not consumed correctly: %#v", got.World.EventQueue)
+	}
+}
+
+func TestRuntimeStepConsumesHighestPriorityReadyQueueItems(t *testing.T) {
+	t.Parallel()
+
+	world := model.World{
+		ID:   "world_1",
+		Name: "World",
+		Clock: model.WorldClock{
+			Current: model.WorldTime{Kind: model.WorldTimeTick, Tick: 5},
+		},
+		EventQueue: []model.EventQueueItem{
+			{Event: model.WorldEvent{ID: "event_low", Type: model.EventTypeNote, Source: model.EventSourceRuntime}, Priority: 1},
+			{Event: model.WorldEvent{ID: "event_future", Type: model.EventTypeNote, Source: model.EventSourceRuntime}, Priority: 100, NotBefore: model.WorldTime{Kind: model.WorldTimeTick, Tick: 6}},
+			{Event: model.WorldEvent{ID: "event_high", Type: model.EventTypeNote, Source: model.EventSourceRuntime}, Priority: 10},
+		},
+	}
+
+	got, err := NewRuntime(WithoutRules(), WithEventQueueLimit(2)).Step(world)
+	if err != nil {
+		t.Fatalf("Step returned error: %v", err)
+	}
+	if len(got.AppliedEvents) != 2 {
+		t.Fatalf("AppliedEvents count = %d, want 2: %#v", len(got.AppliedEvents), got.AppliedEvents)
+	}
+	if got.AppliedEvents[0].ID != "event_high" || got.AppliedEvents[1].ID != "event_low" {
+		t.Fatalf("queued events consumed in wrong order: %#v", got.AppliedEvents)
+	}
+	if len(got.World.EventQueue) != 1 || got.World.EventQueue[0].Event.ID != "event_future" {
+		t.Fatalf("future event should remain queued: %#v", got.World.EventQueue)
+	}
+}
+
+func TestRuntimeStepKeepsEqualPriorityQueueOrder(t *testing.T) {
+	t.Parallel()
+
+	world := model.World{
+		ID:   "world_1",
+		Name: "World",
+		EventQueue: []model.EventQueueItem{
+			{Event: model.WorldEvent{ID: "event_1", Type: model.EventTypeNote, Source: model.EventSourceRuntime}, Priority: 5},
+			{Event: model.WorldEvent{ID: "event_2", Type: model.EventTypeNote, Source: model.EventSourceRuntime}, Priority: 5},
+		},
+	}
+
+	got, err := NewRuntime(WithoutRules(), WithEventQueueLimit(2)).Step(world)
+	if err != nil {
+		t.Fatalf("Step returned error: %v", err)
+	}
+	if len(got.AppliedEvents) != 2 || got.AppliedEvents[0].ID != "event_1" || got.AppliedEvents[1].ID != "event_2" {
+		t.Fatalf("equal priority events should keep queue order: %#v", got.AppliedEvents)
 	}
 }
 

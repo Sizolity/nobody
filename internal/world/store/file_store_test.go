@@ -202,10 +202,13 @@ func TestFileStoreSaveLoadSnapshot(t *testing.T) {
 			Type:   model.EventTypeNote,
 			Source: model.EventSourceTest,
 		}},
-		EventQueue: []model.WorldEvent{{
-			ID:     "event_queued",
-			Type:   model.EventTypeNote,
-			Source: model.EventSourceRuntime,
+		EventQueue: []model.EventQueueItem{{
+			Event: model.WorldEvent{
+				ID:     "event_queued",
+				Type:   model.EventTypeNote,
+				Source: model.EventSourceRuntime,
+			},
+			Priority: 5,
 		}},
 		Memory: []model.MemoryRecord{{
 			ID:         "memory_1",
@@ -246,7 +249,7 @@ func TestFileStoreSaveLoadSnapshot(t *testing.T) {
 	if len(got.EventLog) != 1 || got.EventLog[0].ID != "event_1" {
 		t.Fatalf("event log mismatch: %#v", got.EventLog)
 	}
-	if len(got.EventQueue) != 1 || got.EventQueue[0].ID != "event_queued" {
+	if len(got.EventQueue) != 1 || got.EventQueue[0].Event.ID != "event_queued" || got.EventQueue[0].Priority != 5 {
 		t.Fatalf("event queue mismatch: %#v", got.EventQueue)
 	}
 	if len(got.Memory) != 1 || got.Memory[0].ID != "memory_1" {
@@ -254,6 +257,35 @@ func TestFileStoreSaveLoadSnapshot(t *testing.T) {
 	}
 	if len(got.Threads) != 1 || got.Threads[0].ID != "thread_1" {
 		t.Fatalf("threads mismatch: %#v", got.Threads)
+	}
+}
+
+func TestFileStoreLoadSnapshotAcceptsLegacyBareEventQueue(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	workspace := t.TempDir()
+	st := NewFileStore(workspace)
+	worldDir := filepath.Join(workspace, "worlds", "test_world")
+	if err := os.MkdirAll(worldDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(worldDir, "world.json"), []byte(`{
+		"id": "test_world",
+		"name": "Test World",
+		"event_queue": [
+			{"id": "event_queued", "type": "note", "source": "runtime"}
+		]
+	}`), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	got, err := st.LoadSnapshot(ctx, "test_world")
+	if err != nil {
+		t.Fatalf("LoadSnapshot returned error: %v", err)
+	}
+	if len(got.EventQueue) != 1 || got.EventQueue[0].Event.ID != "event_queued" {
+		t.Fatalf("legacy queue mismatch: %#v", got.EventQueue)
 	}
 }
 
@@ -387,9 +419,11 @@ func TestFileStoreSaveSnapshotRejectsInvalidQueuedEvents(t *testing.T) {
 	world := model.World{
 		ID:   "test_world",
 		Name: "Test World",
-		EventQueue: []model.WorldEvent{{
-			ID:   "event_queued",
-			Type: model.EventTypeNote,
+		EventQueue: []model.EventQueueItem{{
+			Event: model.WorldEvent{
+				ID:   "event_queued",
+				Type: model.EventTypeNote,
+			},
 		}},
 	}
 

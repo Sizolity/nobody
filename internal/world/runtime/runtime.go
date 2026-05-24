@@ -43,14 +43,18 @@ func (r Runtime) Step(world model.World) (StepResult, error) {
 		result.AppliedEvents = append(result.AppliedEvents, proposal)
 	}
 	for i := 0; i < r.EventQueueLimit && len(result.World.EventQueue) > 0; i++ {
-		event := result.World.EventQueue[0]
-		result.World.EventQueue = slices.Clone(result.World.EventQueue[1:])
-		next, err := r.ApplyEvent(result.World, event)
+		queueIndex, ok := nextReadyQueueIndex(result.World)
+		if !ok {
+			break
+		}
+		item := result.World.EventQueue[queueIndex]
+		result.World.EventQueue = removeQueueItem(result.World.EventQueue, queueIndex)
+		next, err := r.ApplyEvent(result.World, item.Event)
 		if err != nil {
 			return result, fmt.Errorf("queued event %d: %w", i, err)
 		}
 		result.World = next
-		result.AppliedEvents = append(result.AppliedEvents, event)
+		result.AppliedEvents = append(result.AppliedEvents, item.Event)
 	}
 	return result, nil
 }
@@ -88,7 +92,7 @@ func cloneWorldForMutation(world model.World) model.World {
 	world.Rules = slices.Clone(world.Rules)
 	world.Threads = slices.Clone(world.Threads)
 	world.EventLog = cloneEvents(world.EventLog)
-	world.EventQueue = cloneEvents(world.EventQueue)
+	world.EventQueue = cloneEventQueue(world.EventQueue)
 	world.Memory = cloneMemories(world.Memory)
 	world.Metadata.Tags = slices.Clone(world.Metadata.Tags)
 	return world
@@ -131,6 +135,17 @@ func cloneEvents(events []model.WorldEvent) []model.WorldEvent {
 		out[i].ActorIDs = slices.Clone(out[i].ActorIDs)
 		out[i].TargetIDs = slices.Clone(out[i].TargetIDs)
 		out[i].Effects = cloneEffects(out[i].Effects)
+	}
+	return out
+}
+
+func cloneEventQueue(queue []model.EventQueueItem) []model.EventQueueItem {
+	out := slices.Clone(queue)
+	for i := range out {
+		out[i].Event.ActorIDs = slices.Clone(out[i].Event.ActorIDs)
+		out[i].Event.TargetIDs = slices.Clone(out[i].Event.TargetIDs)
+		out[i].Event.Effects = cloneEffects(out[i].Event.Effects)
+		out[i].NotBefore.Calendar = cloneIntMap(out[i].NotBefore.Calendar)
 	}
 	return out
 }
@@ -208,6 +223,41 @@ func cloneAny(value any) any {
 	default:
 		return value
 	}
+}
+
+func nextReadyQueueIndex(world model.World) (int, bool) {
+	bestIndex := -1
+	for i, item := range world.EventQueue {
+		if !queueItemReady(world.Clock.Current, item) {
+			continue
+		}
+		if bestIndex == -1 || item.Priority > world.EventQueue[bestIndex].Priority {
+			bestIndex = i
+		}
+	}
+	return bestIndex, bestIndex != -1
+}
+
+func queueItemReady(now model.WorldTime, item model.EventQueueItem) bool {
+	if item.NotBefore.Kind == "" {
+		return true
+	}
+	if item.NotBefore.Kind != now.Kind {
+		return false
+	}
+	switch now.Kind {
+	case model.WorldTimeTick, model.WorldTimeTurn, model.WorldTimeScene, model.WorldTimeChapter, model.WorldTimeDay:
+		return item.NotBefore.Tick <= now.Tick
+	default:
+		return false
+	}
+}
+
+func removeQueueItem(queue []model.EventQueueItem, index int) []model.EventQueueItem {
+	out := make([]model.EventQueueItem, 0, len(queue)-1)
+	out = append(out, queue[:index]...)
+	out = append(out, queue[index+1:]...)
+	return out
 }
 
 func (r Runtime) evaluateRules(world model.World, event model.WorldEvent) error {
@@ -416,10 +466,22 @@ func applyEnqueueEvent(world model.World, effect model.Effect) (model.World, err
 	if err != nil {
 		return model.World{}, err
 	}
-	if err := event.Validate(); err != nil {
-		return model.World{}, fmt.Errorf("payload.event: %w", err)
+	item := model.EventQueueItem{
+		Event:     event,
+		Priority:  int(payloadOptionalFloat(effect, "priority")),
+		CreatedBy: payloadOptionalString(effect, "created_by"),
 	}
-	world.EventQueue = append(world.EventQueue, event)
+	if _, ok := effect.Payload["not_before"]; ok {
+		notBefore, err := payloadWorldTime(effect, "not_before")
+		if err != nil {
+			return model.World{}, err
+		}
+		item.NotBefore = notBefore
+	}
+	if err := item.Validate(); err != nil {
+		return model.World{}, fmt.Errorf("payload.event_queue_item: %w", err)
+	}
+	world.EventQueue = append(world.EventQueue, item)
 	return world, nil
 }
 
@@ -624,5 +686,28 @@ func payloadWorldEvent(effect model.Effect, key string) (model.WorldEvent, error
 		return event, nil
 	default:
 		return model.WorldEvent{}, fmt.Errorf("payload.%s must be a world event", key)
+	}
+}
+
+func payloadWorldTime(effect model.Effect, key string) (model.WorldTime, error) {
+	value, ok := effect.Payload[key]
+	if !ok {
+		return model.WorldTime{}, fmt.Errorf("payload.%s is required", key)
+	}
+	switch raw := value.Raw.(type) {
+	case model.WorldTime:
+		return raw, nil
+	case map[string]any:
+		data, err := json.Marshal(raw)
+		if err != nil {
+			return model.WorldTime{}, fmt.Errorf("payload.%s: %w", key, err)
+		}
+		var worldTime model.WorldTime
+		if err := json.Unmarshal(data, &worldTime); err != nil {
+			return model.WorldTime{}, fmt.Errorf("payload.%s: %w", key, err)
+		}
+		return worldTime, nil
+	default:
+		return model.WorldTime{}, fmt.Errorf("payload.%s must be a world time", key)
 	}
 }

@@ -1,6 +1,9 @@
 package model
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestWorldValidateRequiresIDAndName(t *testing.T) {
 	world := World{Name: "Test World"}
@@ -225,6 +228,67 @@ func TestWorldEventValidateAcceptsEnqueueEventEffect(t *testing.T) {
 	}
 	if err := event.Validate(); err != nil {
 		t.Fatalf("Validate returned error: %v", err)
+	}
+}
+
+func TestEventQueueItemValidateRequiresValidEvent(t *testing.T) {
+	item := EventQueueItem{
+		Event: WorldEvent{ID: "event_queued", Type: EventTypeNote, Source: EventSourceRuntime},
+	}
+	if err := item.Validate(); err != nil {
+		t.Fatalf("Validate returned error: %v", err)
+	}
+
+	item = EventQueueItem{
+		Event: WorldEvent{ID: "event_queued", Type: EventTypeNote},
+	}
+	if err := item.Validate(); err == nil {
+		t.Fatal("Validate returned nil for invalid queued event")
+	}
+}
+
+func TestEventQueueItemJSONRoundTrip(t *testing.T) {
+	item := EventQueueItem{
+		Event:    WorldEvent{ID: "event_queued", Type: EventTypeNote, Source: EventSourceRuntime},
+		Priority: 10,
+		NotBefore: WorldTime{
+			Kind: WorldTimeTick,
+			Tick: 5,
+		},
+		CreatedBy: "event_1",
+	}
+
+	data, err := json.Marshal(item)
+	if err != nil {
+		t.Fatalf("Marshal returned error: %v", err)
+	}
+	var got EventQueueItem
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("Unmarshal returned error: %v", err)
+	}
+	if got.Event.ID != "event_queued" || got.Priority != 10 || got.NotBefore.Tick != 5 || got.CreatedBy != "event_1" {
+		t.Fatalf("queue item mismatch: %#v", got)
+	}
+}
+
+func TestWorldUnmarshalEventQueueAcceptsLegacyBareEvents(t *testing.T) {
+	data := []byte(`{
+		"id": "test_world",
+		"name": "Test World",
+		"event_queue": [
+			{"id": "event_queued", "type": "note", "source": "runtime"}
+		]
+	}`)
+
+	var got World
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("Unmarshal returned error: %v", err)
+	}
+	if len(got.EventQueue) != 1 || got.EventQueue[0].Event.ID != "event_queued" {
+		t.Fatalf("legacy queue was not loaded as queue item: %#v", got.EventQueue)
+	}
+	if got.EventQueue[0].Priority != 0 || got.EventQueue[0].CreatedBy != "" {
+		t.Fatalf("legacy queue metadata should be zero value: %#v", got.EventQueue[0])
 	}
 }
 

@@ -141,7 +141,10 @@ func TestRuntimeAppliesEnqueueEventEffect(t *testing.T) {
 			Kind:     model.EffectEnqueueEvent,
 			TargetID: "event_queued",
 			Payload: map[string]model.Value{
-				"event": {Kind: model.ValueKindObject, Raw: queued},
+				"event":      {Kind: model.ValueKindObject, Raw: queued},
+				"priority":   {Kind: model.ValueKindNumber, Raw: float64(7)},
+				"not_before": {Kind: model.ValueKindObject, Raw: model.WorldTime{Kind: model.WorldTimeTick, Tick: 3}},
+				"created_by": {Kind: model.ValueKindString, Raw: "event_1"},
 			},
 		}},
 	}
@@ -150,8 +153,11 @@ func TestRuntimeAppliesEnqueueEventEffect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ApplyEvent returned error: %v", err)
 	}
-	if len(got.EventQueue) != 1 || got.EventQueue[0].ID != "event_queued" {
+	if len(got.EventQueue) != 1 || got.EventQueue[0].Event.ID != "event_queued" {
 		t.Fatalf("queued event mismatch: %#v", got.EventQueue)
+	}
+	if got.EventQueue[0].Priority != 7 || got.EventQueue[0].NotBefore.Tick != 3 || got.EventQueue[0].CreatedBy != "event_1" {
+		t.Fatalf("queued event metadata mismatch: %#v", got.EventQueue[0])
 	}
 	if len(got.EventLog) != 1 || got.EventLog[0].ID != "event_1" {
 		t.Fatalf("source event was not logged: %#v", got.EventLog)
