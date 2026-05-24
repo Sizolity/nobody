@@ -204,3 +204,206 @@ func TestEntityValidateAcceptsStatsValueMap(t *testing.T) {
 		t.Fatalf("Validate returned error: %v", err)
 	}
 }
+
+func TestEntityTypedComponentAccessors(t *testing.T) {
+	t.Parallel()
+
+	entity := Entity{
+		ID:   "char_alice",
+		Type: "character",
+		Name: "Alice",
+		Components: map[string]any{
+			ComponentProfile:   NewProfileComponent("Alice", "A careful investigator."),
+			ComponentActor:     NewActorComponent(true, []string{"find the truth"}),
+			ComponentSpatial:   NewSpatialComponent("tower"),
+			ComponentInventory: NewInventoryComponent("key_1", "map_1"),
+			ComponentStats: NewStatsComponent(map[string]Value{
+				"strength": {Kind: ValueKindNumber, Raw: float64(3)},
+			}),
+		},
+	}
+
+	profile, ok := entity.ProfileComponent()
+	if !ok {
+		t.Fatal("ProfileComponent ok = false, want true")
+	}
+	if profile.Name != "Alice" || profile.Description != "A careful investigator." {
+		t.Fatalf("profile mismatch: %#v", profile)
+	}
+
+	actor, ok := entity.ActorComponent()
+	if !ok {
+		t.Fatal("ActorComponent ok = false, want true")
+	}
+	if !actor.CanAct || len(actor.Goals) != 1 || actor.Goals[0] != "find the truth" {
+		t.Fatalf("actor mismatch: %#v", actor)
+	}
+
+	spatial, ok := entity.SpatialComponent()
+	if !ok {
+		t.Fatal("SpatialComponent ok = false, want true")
+	}
+	if spatial.LocationID != "tower" {
+		t.Fatalf("spatial mismatch: %#v", spatial)
+	}
+
+	inventory, ok := entity.InventoryComponent()
+	if !ok {
+		t.Fatal("InventoryComponent ok = false, want true")
+	}
+	if len(inventory.ItemIDs) != 2 || inventory.ItemIDs[0] != "key_1" || inventory.ItemIDs[1] != "map_1" {
+		t.Fatalf("inventory mismatch: %#v", inventory)
+	}
+
+	stats, ok := entity.StatsComponent()
+	if !ok {
+		t.Fatal("StatsComponent ok = false, want true")
+	}
+	if stats.Values["strength"].Raw != float64(3) {
+		t.Fatalf("stats mismatch: %#v", stats)
+	}
+}
+
+func TestEntityTypedComponentAccessorsReturnFalseForMissingComponents(t *testing.T) {
+	t.Parallel()
+
+	entity := Entity{ID: "char_alice", Type: "character", Name: "Alice"}
+	if _, ok := entity.ProfileComponent(); ok {
+		t.Fatal("ProfileComponent ok = true, want false")
+	}
+	if _, ok := entity.ActorComponent(); ok {
+		t.Fatal("ActorComponent ok = true, want false")
+	}
+	if _, ok := entity.SpatialComponent(); ok {
+		t.Fatal("SpatialComponent ok = true, want false")
+	}
+	if _, ok := entity.InventoryComponent(); ok {
+		t.Fatal("InventoryComponent ok = true, want false")
+	}
+	if _, ok := entity.StatsComponent(); ok {
+		t.Fatal("StatsComponent ok = true, want false")
+	}
+}
+
+func TestEntityTypedComponentAccessorsCopyReturnedData(t *testing.T) {
+	t.Parallel()
+
+	entity := Entity{
+		ID:   "char_alice",
+		Type: "character",
+		Name: "Alice",
+		Components: map[string]any{
+			ComponentActor:     NewActorComponent(true, []string{"find the truth"}),
+			ComponentInventory: NewInventoryComponent("key_1"),
+			ComponentStats: NewStatsComponent(map[string]Value{
+				"strength": {Kind: ValueKindNumber, Raw: float64(3)},
+			}),
+		},
+	}
+
+	actor, ok := entity.ActorComponent()
+	if !ok {
+		t.Fatal("ActorComponent ok = false, want true")
+	}
+	actor.Goals[0] = "changed"
+	againActor, _ := entity.ActorComponent()
+	if againActor.Goals[0] != "find the truth" {
+		t.Fatalf("actor accessor returned aliased goals: %#v", againActor.Goals)
+	}
+
+	inventory, ok := entity.InventoryComponent()
+	if !ok {
+		t.Fatal("InventoryComponent ok = false, want true")
+	}
+	inventory.ItemIDs[0] = "changed"
+	againInventory, _ := entity.InventoryComponent()
+	if againInventory.ItemIDs[0] != "key_1" {
+		t.Fatalf("inventory accessor returned aliased item ids: %#v", againInventory.ItemIDs)
+	}
+
+	stats, ok := entity.StatsComponent()
+	if !ok {
+		t.Fatal("StatsComponent ok = false, want true")
+	}
+	stats.Values["strength"] = Value{Kind: ValueKindNumber, Raw: float64(99)}
+	againStats, _ := entity.StatsComponent()
+	if againStats.Values["strength"].Raw != float64(3) {
+		t.Fatalf("stats accessor returned aliased values: %#v", againStats.Values)
+	}
+}
+
+func TestEntityTypedComponentAccessorsReadJSONShapedComponents(t *testing.T) {
+	t.Parallel()
+
+	entity := Entity{
+		ID:   "char_alice",
+		Type: "character",
+		Name: "Alice",
+		Components: map[string]any{
+			ComponentActor: map[string]any{
+				"can_act": true,
+				"goals":   []any{"find the truth"},
+			},
+			ComponentInventory: map[string]any{
+				"item_ids": []any{"key_1"},
+			},
+			ComponentStats: map[string]any{
+				"values": map[string]any{
+					"strength": map[string]any{
+						"kind": "number",
+						"raw":  float64(3),
+					},
+				},
+			},
+		},
+	}
+
+	actor, ok := entity.ActorComponent()
+	if !ok {
+		t.Fatal("ActorComponent ok = false, want true")
+	}
+	if len(actor.Goals) != 1 || actor.Goals[0] != "find the truth" {
+		t.Fatalf("actor goals mismatch: %#v", actor.Goals)
+	}
+
+	inventory, ok := entity.InventoryComponent()
+	if !ok {
+		t.Fatal("InventoryComponent ok = false, want true")
+	}
+	if len(inventory.ItemIDs) != 1 || inventory.ItemIDs[0] != "key_1" {
+		t.Fatalf("inventory ids mismatch: %#v", inventory.ItemIDs)
+	}
+
+	stats, ok := entity.StatsComponent()
+	if !ok {
+		t.Fatal("StatsComponent ok = false, want true")
+	}
+	if stats.Values["strength"].Kind != ValueKindNumber || stats.Values["strength"].Raw != float64(3) {
+		t.Fatalf("stats values mismatch: %#v", stats.Values)
+	}
+}
+
+func TestEntityTypedComponentAccessorsRejectInvalidExistingComponents(t *testing.T) {
+	t.Parallel()
+
+	entity := Entity{
+		ID:   "char_alice",
+		Type: "character",
+		Name: "Alice",
+		Components: map[string]any{
+			ComponentActor:     map[string]any{"goals": []any{"find", 1}},
+			ComponentInventory: map[string]any{"item_ids": []any{"key_1", 2}},
+			ComponentStats:     map[string]any{"values": "strong"},
+		},
+	}
+
+	if _, ok := entity.ActorComponent(); ok {
+		t.Fatal("ActorComponent ok = true for invalid component")
+	}
+	if _, ok := entity.InventoryComponent(); ok {
+		t.Fatal("InventoryComponent ok = true for invalid component")
+	}
+	if _, ok := entity.StatsComponent(); ok {
+		t.Fatal("StatsComponent ok = true for invalid component")
+	}
+}

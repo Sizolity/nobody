@@ -20,6 +20,28 @@ const (
 	ComponentStats     = "stats"
 )
 
+type ProfileComponent struct {
+	Name        string
+	Description string
+}
+
+type ActorComponent struct {
+	CanAct bool
+	Goals  []string
+}
+
+type SpatialComponent struct {
+	LocationID EntityID
+}
+
+type InventoryComponent struct {
+	ItemIDs []EntityID
+}
+
+type StatsComponent struct {
+	Values map[string]Value
+}
+
 func (e Entity) Validate() error {
 	if err := ValidateID(string(e.ID)); err != nil {
 		return fmt.Errorf("entity.id: %w", err)
@@ -36,6 +58,81 @@ func (e Entity) Validate() error {
 		}
 	}
 	return nil
+}
+
+func (e Entity) ProfileComponent() (ProfileComponent, bool) {
+	data, ok := componentObject(e.Components, ComponentProfile)
+	if !ok {
+		return ProfileComponent{}, false
+	}
+	if err := validateProfileComponent(data); err != nil {
+		return ProfileComponent{}, false
+	}
+	return ProfileComponent{
+		Name:        stringValue(data, "name"),
+		Description: stringValue(data, "description"),
+	}, true
+}
+
+func (e Entity) ActorComponent() (ActorComponent, bool) {
+	data, ok := componentObject(e.Components, ComponentActor)
+	if !ok {
+		return ActorComponent{}, false
+	}
+	if err := validateActorComponent(data); err != nil {
+		return ActorComponent{}, false
+	}
+	goals := []string{}
+	if value, ok := data["goals"]; ok {
+		goals, _ = stringList(value)
+	}
+	return ActorComponent{
+		CanAct: boolValue(data, "can_act"),
+		Goals:  append([]string(nil), goals...),
+	}, true
+}
+
+func (e Entity) SpatialComponent() (SpatialComponent, bool) {
+	data, ok := componentObject(e.Components, ComponentSpatial)
+	if !ok {
+		return SpatialComponent{}, false
+	}
+	if err := validateSpatialComponent(data); err != nil {
+		return SpatialComponent{}, false
+	}
+	return SpatialComponent{
+		LocationID: EntityID(stringValue(data, "location_id")),
+	}, true
+}
+
+func (e Entity) InventoryComponent() (InventoryComponent, bool) {
+	data, ok := componentObject(e.Components, ComponentInventory)
+	if !ok {
+		return InventoryComponent{}, false
+	}
+	if err := validateInventoryComponent(data); err != nil {
+		return InventoryComponent{}, false
+	}
+	items := []string{}
+	if value, ok := data["item_ids"]; ok {
+		items, _ = stringList(value)
+	}
+	itemIDs := make([]EntityID, len(items))
+	for i, item := range items {
+		itemIDs[i] = EntityID(item)
+	}
+	return InventoryComponent{ItemIDs: itemIDs}, true
+}
+
+func (e Entity) StatsComponent() (StatsComponent, bool) {
+	data, ok := componentObject(e.Components, ComponentStats)
+	if !ok {
+		return StatsComponent{}, false
+	}
+	if err := validateStatsComponent(data); err != nil {
+		return StatsComponent{}, false
+	}
+	return StatsComponent{Values: valueMap(data["values"])}, true
 }
 
 func validateComponent(key string, component any) error {
@@ -148,6 +245,98 @@ func stringList(value any) ([]string, error) {
 		return out, nil
 	default:
 		return nil, fmt.Errorf("must be a string list")
+	}
+}
+
+func componentObject(components map[string]any, key string) (map[string]any, bool) {
+	component, ok := components[key]
+	if !ok {
+		return nil, false
+	}
+	data, ok := component.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	return data, true
+}
+
+func stringValue(data map[string]any, key string) string {
+	value, _ := data[key].(string)
+	return value
+}
+
+func boolValue(data map[string]any, key string) bool {
+	value, _ := data[key].(bool)
+	return value
+}
+
+func valueMap(value any) map[string]Value {
+	switch typed := value.(type) {
+	case map[string]Value:
+		out := make(map[string]Value, len(typed))
+		for key, value := range typed {
+			out[key] = cloneComponentValue(value)
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]Value, len(typed))
+		for key, value := range typed {
+			if typedValue, ok := value.(Value); ok {
+				out[key] = cloneComponentValue(typedValue)
+				continue
+			}
+			if typedValue, ok := valueFromObject(value); ok {
+				out[key] = typedValue
+			}
+		}
+		return out
+	default:
+		return map[string]Value{}
+	}
+}
+
+func valueFromObject(value any) (Value, bool) {
+	data, ok := value.(map[string]any)
+	if !ok {
+		return Value{}, false
+	}
+	kind, _ := data["kind"].(string)
+	out := Value{
+		Kind: kind,
+		Raw:  cloneComponentAny(data["raw"]),
+	}
+	if unit, ok := data["unit"].(string); ok {
+		out.Unit = unit
+	}
+	if source, ok := data["source"].(string); ok {
+		out.Source = source
+	}
+	return out, true
+}
+
+func cloneComponentValue(value Value) Value {
+	value.Raw = cloneComponentAny(value.Raw)
+	return value
+}
+
+func cloneComponentAny(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for key, value := range typed {
+			out[key] = cloneComponentAny(value)
+		}
+		return out
+	case []any:
+		out := make([]any, len(typed))
+		for i, value := range typed {
+			out[i] = cloneComponentAny(value)
+		}
+		return out
+	case []string:
+		return append([]string(nil), typed...)
+	default:
+		return typed
 	}
 }
 
