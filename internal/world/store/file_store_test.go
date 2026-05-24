@@ -183,6 +183,11 @@ func TestFileStoreSaveLoadSnapshot(t *testing.T) {
 			Type:   model.EventTypeNote,
 			Source: model.EventSourceTest,
 		}},
+		EventQueue: []model.WorldEvent{{
+			ID:     "event_queued",
+			Type:   model.EventTypeNote,
+			Source: model.EventSourceRuntime,
+		}},
 		Memory: []model.MemoryRecord{{
 			ID:         "memory_1",
 			Owner:      model.MemoryOwner{Kind: model.MemoryOwnerKindCharacter, ID: "hero"},
@@ -221,6 +226,9 @@ func TestFileStoreSaveLoadSnapshot(t *testing.T) {
 	}
 	if len(got.EventLog) != 1 || got.EventLog[0].ID != "event_1" {
 		t.Fatalf("event log mismatch: %#v", got.EventLog)
+	}
+	if len(got.EventQueue) != 1 || got.EventQueue[0].ID != "event_queued" {
+		t.Fatalf("event queue mismatch: %#v", got.EventQueue)
 	}
 	if len(got.Memory) != 1 || got.Memory[0].ID != "memory_1" {
 		t.Fatalf("memory mismatch: %#v", got.Memory)
@@ -324,6 +332,25 @@ func TestFileStoreListEventsRejectsInvalidEvents(t *testing.T) {
 
 	if _, err := st.ListEvents(ctx, "test_world"); err == nil {
 		t.Fatal("ListEvents returned nil for invalid event")
+	}
+}
+
+func TestFileStoreSaveSnapshotRejectsInvalidQueuedEvents(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := NewFileStore(t.TempDir())
+	world := model.World{
+		ID:   "test_world",
+		Name: "Test World",
+		EventQueue: []model.WorldEvent{{
+			ID:   "event_queued",
+			Type: model.EventTypeNote,
+		}},
+	}
+
+	if err := st.SaveSnapshot(ctx, world); err == nil {
+		t.Fatal("SaveSnapshot returned nil for invalid queued event")
 	}
 }
 

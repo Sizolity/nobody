@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
 
@@ -9,8 +10,9 @@ import (
 )
 
 type Runtime struct {
-	Rules     []Rule
-	Directors []director.Director
+	Rules           []Rule
+	Directors       []director.Director
+	EventQueueLimit int
 }
 
 type StepResult struct {
@@ -39,6 +41,16 @@ func (r Runtime) Step(world model.World) (StepResult, error) {
 		}
 		result.World = next
 		result.AppliedEvents = append(result.AppliedEvents, proposal)
+	}
+	for i := 0; i < r.EventQueueLimit && len(result.World.EventQueue) > 0; i++ {
+		event := result.World.EventQueue[0]
+		result.World.EventQueue = slices.Clone(result.World.EventQueue[1:])
+		next, err := r.ApplyEvent(result.World, event)
+		if err != nil {
+			return result, fmt.Errorf("queued event %d: %w", i, err)
+		}
+		result.World = next
+		result.AppliedEvents = append(result.AppliedEvents, event)
 	}
 	return result, nil
 }
@@ -229,6 +241,8 @@ func applyEffect(world model.World, effect model.Effect) (model.World, error) {
 		return applyReviseMemory(world, effect)
 	case model.EffectReconcileMemory:
 		return applyReconcileMemory(world, effect)
+	case model.EffectEnqueueEvent:
+		return applyEnqueueEvent(world, effect)
 	case model.EffectOpenThread:
 		return applyOpenThread(world, effect)
 	case model.EffectUpdateThread:
@@ -395,6 +409,18 @@ func applyReconcileMemory(world model.World, effect model.Effect) (model.World, 
 		return world, nil
 	}
 	return model.World{}, fmt.Errorf("memory %q not found", effect.TargetID)
+}
+
+func applyEnqueueEvent(world model.World, effect model.Effect) (model.World, error) {
+	event, err := payloadWorldEvent(effect, "event")
+	if err != nil {
+		return model.World{}, err
+	}
+	if err := event.Validate(); err != nil {
+		return model.World{}, fmt.Errorf("payload.event: %w", err)
+	}
+	world.EventQueue = append(world.EventQueue, event)
+	return world, nil
 }
 
 func reconciliationMemoryFromPayload(effect model.Effect, reconciled model.MemoryRecord) (model.MemoryRecord, bool, error) {
@@ -576,4 +602,27 @@ func payloadEntityID(effect model.Effect, key string) (model.EntityID, error) {
 		return "", fmt.Errorf("payload.%s: %w", key, err)
 	}
 	return model.EntityID(raw), nil
+}
+
+func payloadWorldEvent(effect model.Effect, key string) (model.WorldEvent, error) {
+	value, ok := effect.Payload[key]
+	if !ok {
+		return model.WorldEvent{}, fmt.Errorf("payload.%s is required", key)
+	}
+	switch raw := value.Raw.(type) {
+	case model.WorldEvent:
+		return raw, nil
+	case map[string]any:
+		data, err := json.Marshal(raw)
+		if err != nil {
+			return model.WorldEvent{}, fmt.Errorf("payload.%s: %w", key, err)
+		}
+		var event model.WorldEvent
+		if err := json.Unmarshal(data, &event); err != nil {
+			return model.WorldEvent{}, fmt.Errorf("payload.%s: %w", key, err)
+		}
+		return event, nil
+	default:
+		return model.WorldEvent{}, fmt.Errorf("payload.%s must be a world event", key)
+	}
 }

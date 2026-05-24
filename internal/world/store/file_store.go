@@ -98,6 +98,11 @@ func validateSnapshot(world model.World) error {
 			return fmt.Errorf("events[%d]: %w", i, err)
 		}
 	}
+	for i, event := range world.EventQueue {
+		if err := event.Validate(); err != nil {
+			return fmt.Errorf("event_queue[%d]: %w", i, err)
+		}
+	}
 	for i, memory := range world.Memory {
 		if err := memory.Validate(); err != nil {
 			return fmt.Errorf("memories[%d]: %w", i, err)

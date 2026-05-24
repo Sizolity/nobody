@@ -203,6 +203,31 @@ func TestWorldEventValidateAcceptsReconcileMemoryEffect(t *testing.T) {
 	}
 }
 
+func TestWorldEventValidateAcceptsEnqueueEventEffect(t *testing.T) {
+	event := WorldEvent{
+		ID:     "event_1",
+		Type:   EventTypeNote,
+		Source: EventSourceTest,
+		Effects: []Effect{{
+			Kind:     EffectEnqueueEvent,
+			TargetID: "event_queued",
+			Payload: map[string]Value{
+				"event": {
+					Kind: ValueKindObject,
+					Raw: WorldEvent{
+						ID:     "event_queued",
+						Type:   EventTypeNote,
+						Source: EventSourceRuntime,
+					},
+				},
+			},
+		}},
+	}
+	if err := event.Validate(); err != nil {
+		t.Fatalf("Validate returned error: %v", err)
+	}
+}
+
 func TestWorldThreadValidateRequiresIDAndTitle(t *testing.T) {
 	thread := WorldThread{Kind: ThreadKindMystery, Title: "Find the killer"}
 	if err := thread.Validate(); err == nil {

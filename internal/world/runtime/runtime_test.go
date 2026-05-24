@@ -123,6 +123,41 @@ func TestRuntimeAppliesAddRelationEffect(t *testing.T) {
 	}
 }
 
+func TestRuntimeAppliesEnqueueEventEffect(t *testing.T) {
+	t.Parallel()
+
+	rt := Runtime{}
+	world := model.World{ID: "test_world", Name: "Test World"}
+	queued := model.WorldEvent{
+		ID:     "event_queued",
+		Type:   model.EventTypeNote,
+		Source: model.EventSourceRuntime,
+	}
+	event := model.WorldEvent{
+		ID:     "event_1",
+		Type:   model.EventTypeNote,
+		Source: model.EventSourceTest,
+		Effects: []model.Effect{{
+			Kind:     model.EffectEnqueueEvent,
+			TargetID: "event_queued",
+			Payload: map[string]model.Value{
+				"event": {Kind: model.ValueKindObject, Raw: queued},
+			},
+		}},
+	}
+
+	got, err := rt.ApplyEvent(world, event)
+	if err != nil {
+		t.Fatalf("ApplyEvent returned error: %v", err)
+	}
+	if len(got.EventQueue) != 1 || got.EventQueue[0].ID != "event_queued" {
+		t.Fatalf("queued event mismatch: %#v", got.EventQueue)
+	}
+	if len(got.EventLog) != 1 || got.EventLog[0].ID != "event_1" {
+		t.Fatalf("source event was not logged: %#v", got.EventLog)
+	}
+}
+
 func TestRuntimeAppliesAddMemoryEffect(t *testing.T) {
 	rt := Runtime{}
 	world := model.World{ID: "test_world", Name: "Test World"}

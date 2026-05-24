@@ -193,3 +193,41 @@ func TestRunnerStepDoesNotSaveWhenStepFails(t *testing.T) {
 		t.Fatalf("failed step was persisted: %#v", saved.EventLog)
 	}
 }
+
+func TestRunnerStepConsumesQueueAndSavesRemainingQueue(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := store.NewFileStore(t.TempDir())
+	initial := model.World{
+		ID:   "test_world",
+		Name: "Test World",
+		EventQueue: []model.WorldEvent{
+			{ID: "event_queued_1", Type: model.EventTypeNote, Source: model.EventSourceRuntime},
+			{ID: "event_queued_2", Type: model.EventTypeNote, Source: model.EventSourceRuntime},
+		},
+	}
+	if err := st.SaveSnapshot(ctx, initial); err != nil {
+		t.Fatalf("SaveSnapshot returned error: %v", err)
+	}
+	r := New(st, worldruntime.WithoutRules(), worldruntime.WithEventQueueLimit(1))
+
+	got, err := r.Step(ctx, "test_world")
+	if err != nil {
+		t.Fatalf("Step returned error: %v", err)
+	}
+	if len(got.AppliedEvents) != 1 || got.AppliedEvents[0].ID != "event_queued_1" {
+		t.Fatalf("AppliedEvents mismatch: %#v", got.AppliedEvents)
+	}
+
+	saved, err := st.LoadSnapshot(ctx, "test_world")
+	if err != nil {
+		t.Fatalf("LoadSnapshot returned error: %v", err)
+	}
+	if len(saved.EventLog) != 1 || saved.EventLog[0].ID != "event_queued_1" {
+		t.Fatalf("event log not persisted: %#v", saved.EventLog)
+	}
+	if len(saved.EventQueue) != 1 || saved.EventQueue[0].ID != "event_queued_2" {
+		t.Fatalf("remaining queue not persisted: %#v", saved.EventQueue)
+	}
+}

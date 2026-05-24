@@ -36,3 +36,9 @@ func WithDirectors(directors ...director.Director) RuntimeOption {
 		rt.Directors = append([]director.Director(nil), directors...)
 	}
 }
+
+func WithEventQueueLimit(limit int) RuntimeOption {
+	return func(rt *Runtime) {
+		rt.EventQueueLimit = limit
+	}
+}

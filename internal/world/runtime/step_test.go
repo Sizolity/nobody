@@ -68,6 +68,58 @@ func TestRuntimeStepAppliesDirectorProposals(t *testing.T) {
 	}
 }
 
+func TestRuntimeStepDoesNotConsumeEventQueueByDefault(t *testing.T) {
+	t.Parallel()
+
+	world := model.World{
+		ID:   "world_1",
+		Name: "World",
+		EventQueue: []model.WorldEvent{{
+			ID:     "event_queued",
+			Type:   model.EventTypeNote,
+			Source: model.EventSourceRuntime,
+		}},
+	}
+
+	got, err := NewRuntime(WithoutRules()).Step(world)
+	if err != nil {
+		t.Fatalf("Step returned error: %v", err)
+	}
+	if len(got.World.EventQueue) != 1 || got.World.EventQueue[0].ID != "event_queued" {
+		t.Fatalf("queue should remain untouched by default: %#v", got.World.EventQueue)
+	}
+	if len(got.AppliedEvents) != 0 {
+		t.Fatalf("AppliedEvents = %#v, want empty", got.AppliedEvents)
+	}
+}
+
+func TestRuntimeStepConsumesEventQueueWithLimit(t *testing.T) {
+	t.Parallel()
+
+	world := model.World{
+		ID:   "world_1",
+		Name: "World",
+		EventQueue: []model.WorldEvent{
+			{ID: "event_queued_1", Type: model.EventTypeNote, Source: model.EventSourceRuntime},
+			{ID: "event_queued_2", Type: model.EventTypeNote, Source: model.EventSourceRuntime},
+		},
+	}
+
+	got, err := NewRuntime(WithoutRules(), WithEventQueueLimit(1)).Step(world)
+	if err != nil {
+		t.Fatalf("Step returned error: %v", err)
+	}
+	if len(got.AppliedEvents) != 1 || got.AppliedEvents[0].ID != "event_queued_1" {
+		t.Fatalf("AppliedEvents mismatch: %#v", got.AppliedEvents)
+	}
+	if len(got.World.EventLog) != 1 || got.World.EventLog[0].ID != "event_queued_1" {
+		t.Fatalf("queued event was not logged: %#v", got.World.EventLog)
+	}
+	if len(got.World.EventQueue) != 1 || got.World.EventQueue[0].ID != "event_queued_2" {
+		t.Fatalf("queue was not consumed correctly: %#v", got.World.EventQueue)
+	}
+}
+
 func TestRuntimeStepAppliesReconcileDirectorProposals(t *testing.T) {
 	t.Parallel()
 
