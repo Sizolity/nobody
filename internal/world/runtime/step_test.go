@@ -68,6 +68,51 @@ func TestRuntimeStepAppliesDirectorProposals(t *testing.T) {
 	}
 }
 
+func TestRuntimeStepAppliesReconcileDirectorProposals(t *testing.T) {
+	t.Parallel()
+
+	rt := NewRuntime(
+		WithoutRules(),
+		WithDirectors(director.NewReconcileDirector("reconcile_1", []director.ReconcileCase{{
+			EventID:          "event_reconcile_1",
+			TargetMemoryID:   "memory_1",
+			WhenTruthStatus:  model.TruthStatusUnknown,
+			TruthStatus:      model.TruthStatusDisputed,
+			ConfidenceDelta:  -0.5,
+			Summary:          "New evidence disputes this belief.",
+			AddMemoryID:      "memory_2",
+			AddMemoryContent: "I may have been wrong.",
+		}})),
+	)
+	world := model.World{
+		ID:   "world_1",
+		Name: "World",
+		Memory: []model.MemoryRecord{{
+			ID:          "memory_1",
+			Owner:       model.MemoryOwner{Kind: model.MemoryOwnerKindCharacter, ID: "char_c"},
+			Scope:       model.MemoryScopeSubjective,
+			Kind:        model.MemoryKindBelief,
+			Content:     "A killed the king.",
+			TruthStatus: model.TruthStatusUnknown,
+			Confidence:  0.8,
+		}},
+	}
+
+	got, err := rt.Step(world)
+	if err != nil {
+		t.Fatalf("Step returned error: %v", err)
+	}
+	if len(got.Proposals) != 1 || got.Proposals[0].ID != "event_reconcile_1" {
+		t.Fatalf("Proposals mismatch: %#v", got.Proposals)
+	}
+	if got.World.Memory[0].TruthStatus != model.TruthStatusDisputed {
+		t.Fatalf("memory was not reconciled: %#v", got.World.Memory[0])
+	}
+	if len(got.World.Memory) != 2 || got.World.Memory[1].ID != "memory_2" {
+		t.Fatalf("follow-up memory missing: %#v", got.World.Memory)
+	}
+}
+
 func TestRuntimeStepReturnsDirectorErrorsWithoutMutatingWorld(t *testing.T) {
 	t.Parallel()
 
