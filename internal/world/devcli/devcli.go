@@ -13,6 +13,7 @@ import (
 	"github.com/sizolity/nobody/internal/world/runner"
 	worldruntime "github.com/sizolity/nobody/internal/world/runtime"
 	"github.com/sizolity/nobody/internal/world/store"
+	worldview "github.com/sizolity/nobody/internal/world/view"
 )
 
 func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
@@ -29,6 +30,10 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runStepScript(ctx, args[1:], stdout, stderr)
 	case "step-reconcile":
 		return runStepReconcile(ctx, args[1:], stdout, stderr)
+	case "debug-view":
+		return runDebugView(ctx, args[1:], stdout, stderr)
+	case "narrative-view":
+		return runNarrativeView(ctx, args[1:], stdout, stderr)
 	case "show":
 		return runShow(ctx, args[1:], stdout, stderr)
 	default:
@@ -164,6 +169,59 @@ func runShow(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	data, err := json.MarshalIndent(world, "", "  ")
 	if err != nil {
 		fmt.Fprintf(stderr, "encode world failed: %v\n", err)
+		return 1
+	}
+	if _, err := stdout.Write(append(data, '\n')); err != nil {
+		fmt.Fprintf(stderr, "write output failed: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+func runDebugView(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	fs := newFlagSet("debug-view", stderr)
+	workspace := fs.String("workspace", "", "workspace directory")
+	worldID := fs.String("world-id", "", "world id")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *workspace == "" || *worldID == "" {
+		fmt.Fprintln(stderr, "debug-view requires --workspace and --world-id")
+		return 2
+	}
+	world, err := store.NewFileStore(*workspace).LoadSnapshot(ctx, *worldID)
+	if err != nil {
+		fmt.Fprintf(stderr, "debug-view failed: %v\n", err)
+		return 1
+	}
+	return writeJSON(stdout, stderr, "encode debug view failed", worldview.WorldDebugView{}.Render(world))
+}
+
+func runNarrativeView(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	fs := newFlagSet("narrative-view", stderr)
+	workspace := fs.String("workspace", "", "workspace directory")
+	worldID := fs.String("world-id", "", "world id")
+	recentEvents := fs.Int("recent-events", 0, "number of recent events to include; <=0 includes all")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *workspace == "" || *worldID == "" {
+		fmt.Fprintln(stderr, "narrative-view requires --workspace and --world-id")
+		return 2
+	}
+	world, err := store.NewFileStore(*workspace).LoadSnapshot(ctx, *worldID)
+	if err != nil {
+		fmt.Fprintf(stderr, "narrative-view failed: %v\n", err)
+		return 1
+	}
+	ctxView := worldview.NarrativeView{}.Render(world, worldview.NarrativeContextRequest{RecentEventLimit: *recentEvents})
+	return writeJSON(stdout, stderr, "encode narrative view failed", ctxView)
+}
+
+func writeJSON(stdout, stderr io.Writer, message string, v any) int {
+	data, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		fmt.Fprintf(stderr, "%s: %v\n", message, err)
 		return 1
 	}
 	if _, err := stdout.Write(append(data, '\n')); err != nil {

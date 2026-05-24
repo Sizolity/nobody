@@ -10,6 +10,7 @@ import (
 
 	"github.com/sizolity/nobody/internal/world/model"
 	"github.com/sizolity/nobody/internal/world/store"
+	worldview "github.com/sizolity/nobody/internal/world/view"
 )
 
 func TestRunInitCreatesWorldSnapshot(t *testing.T) {
@@ -236,6 +237,93 @@ func TestRunShowPrintsSnapshotJSON(t *testing.T) {
 	}
 }
 
+func TestRunDebugViewPrintsWorldDebugContextJSON(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	ctx := context.Background()
+	st := store.NewFileStore(workspace)
+	if err := st.SaveSnapshot(ctx, inspectionWorld()); err != nil {
+		t.Fatalf("SaveSnapshot returned error: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Run(ctx, []string{
+		"debug-view",
+		"--workspace", workspace,
+		"--world-id", "test_world",
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("Run exit code = %d, stderr=%s", code, stderr.String())
+	}
+
+	var got worldview.WorldDebugContext
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("stdout is not debug context JSON: %v\n%s", err, stdout.String())
+	}
+	if got.World.ID != "test_world" {
+		t.Fatalf("debug world id = %q, want test_world", got.World.ID)
+	}
+	if len(got.Memories) != 3 {
+		t.Fatalf("debug memories count = %d, want 3: %#v", len(got.Memories), got.Memories)
+	}
+	hasSecret := false
+	hasPrivate := false
+	for _, memory := range got.Memories {
+		if memory.TruthStatus == model.TruthStatusSecret {
+			hasSecret = true
+		}
+		if memory.Owner.Kind == model.MemoryOwnerKindCharacter {
+			hasPrivate = true
+		}
+	}
+	if !hasSecret || !hasPrivate {
+		t.Fatalf("debug view should expose secret and private memories: %#v", got.Memories)
+	}
+	if len(got.EventLog) != 3 {
+		t.Fatalf("debug event log count = %d, want 3", len(got.EventLog))
+	}
+}
+
+func TestRunNarrativeViewPrintsNarrativeContextJSON(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	ctx := context.Background()
+	st := store.NewFileStore(workspace)
+	if err := st.SaveSnapshot(ctx, inspectionWorld()); err != nil {
+		t.Fatalf("SaveSnapshot returned error: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Run(ctx, []string{
+		"narrative-view",
+		"--workspace", workspace,
+		"--world-id", "test_world",
+		"--recent-events", "2",
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("Run exit code = %d, stderr=%s", code, stderr.String())
+	}
+
+	var got worldview.NarrativeContext
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("stdout is not narrative context JSON: %v\n%s", err, stdout.String())
+	}
+	if got.World.ID != "test_world" {
+		t.Fatalf("narrative world id = %q, want test_world", got.World.ID)
+	}
+	if len(got.RecentEvents) != 2 || got.RecentEvents[0].ID != "event_2" || got.RecentEvents[1].ID != "event_3" {
+		t.Fatalf("recent events mismatch: %#v", got.RecentEvents)
+	}
+	if len(got.ActiveThreads) != 1 || got.ActiveThreads[0].ID != "thread_open" {
+		t.Fatalf("active threads mismatch: %#v", got.ActiveThreads)
+	}
+	if len(got.PublicMemories) != 1 || got.PublicMemories[0].ID != "memory_world_public" {
+		t.Fatalf("public memories mismatch: %#v", got.PublicMemories)
+	}
+}
+
 func TestRunStepScriptPersistsAppliedEvents(t *testing.T) {
 	t.Parallel()
 
@@ -411,5 +499,53 @@ func writeTestJSON(t *testing.T, path string, v any) {
 	}
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatalf("WriteFile returned error: %v", err)
+	}
+}
+
+func inspectionWorld() model.World {
+	return model.World{
+		ID:   "test_world",
+		Name: "Test World",
+		Facts: []model.Fact{{
+			ID:        "fact_1",
+			SubjectID: "char_c",
+			Predicate: "location",
+			Value:     model.Value{Kind: model.ValueKindString, Raw: "tower"},
+		}},
+		Threads: []model.WorldThread{
+			{ID: "thread_open", Kind: model.ThreadKindMystery, Title: "Open mystery", Status: model.ThreadStatusOpen},
+			{ID: "thread_done", Kind: model.ThreadKindQuest, Title: "Done quest", Status: model.ThreadStatusResolved},
+		},
+		EventLog: []model.WorldEvent{
+			{ID: "event_1", Type: model.EventTypeNote, Source: model.EventSourceTest},
+			{ID: "event_2", Type: model.EventTypeNote, Source: model.EventSourceTest},
+			{ID: "event_3", Type: model.EventTypeNote, Source: model.EventSourceTest},
+		},
+		Memory: []model.MemoryRecord{
+			{
+				ID:          "memory_world_public",
+				Owner:       model.MemoryOwner{Kind: model.MemoryOwnerKindWorld},
+				Scope:       model.MemoryScopeFactual,
+				Kind:        model.MemoryKindObservation,
+				Content:     "The tower bell rang.",
+				TruthStatus: model.TruthStatusTrue,
+			},
+			{
+				ID:          "memory_world_secret",
+				Owner:       model.MemoryOwner{Kind: model.MemoryOwnerKindWorld},
+				Scope:       model.MemoryScopeFactual,
+				Kind:        model.MemoryKindObservation,
+				Content:     "The assassin escaped.",
+				TruthStatus: model.TruthStatusSecret,
+			},
+			{
+				ID:          "memory_character_private",
+				Owner:       model.MemoryOwner{Kind: model.MemoryOwnerKindCharacter, ID: "char_c"},
+				Scope:       model.MemoryScopeSubjective,
+				Kind:        model.MemoryKindBelief,
+				Content:     "I am being followed.",
+				TruthStatus: model.TruthStatusUnknown,
+			},
+		},
 	}
 }
