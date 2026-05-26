@@ -425,6 +425,32 @@ func (s *FileStore) ForkWorld(ctx context.Context, sourceWorldID, newWorldID str
 	return world, nil
 }
 
+// ListWorlds returns the IDs of all worlds in the store by scanning the
+// worlds directory. Only directories containing a valid world.json are included.
+func (s *FileStore) ListWorlds(_ context.Context) ([]string, error) {
+	entries, err := os.ReadDir(s.root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []string{}, nil
+		}
+		return nil, err
+	}
+	var ids []string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		worldFile := filepath.Join(s.root, entry.Name(), "world.json")
+		if _, err := os.Stat(worldFile); err == nil {
+			ids = append(ids, entry.Name())
+		}
+	}
+	if ids == nil {
+		ids = []string{}
+	}
+	return ids, nil
+}
+
 func (s *FileStore) worldDir(worldID string) string {
 	return filepath.Join(s.root, worldID)
 }

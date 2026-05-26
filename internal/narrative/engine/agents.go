@@ -55,8 +55,25 @@ type ContinuityReport struct {
 }
 
 type ContinuityIssue struct {
-	Code    string
-	Summary string
+	Code     string `json:"code"`
+	Severity string `json:"severity"`
+	Summary  string `json:"summary"`
+}
+
+const (
+	SeverityCritical = "critical"
+	SeverityWarning  = "warning"
+	SeverityInfo     = "info"
+)
+
+// HasCritical returns true if any issue has critical severity.
+func (r ContinuityReport) HasCritical() bool {
+	for _, issue := range r.Issues {
+		if issue.Severity == SeverityCritical {
+			return true
+		}
+	}
+	return false
 }
 
 type MemoryDelta struct {

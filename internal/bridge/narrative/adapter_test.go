@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/sizolity/nobody/internal/world/model"
+	"github.com/sizolity/nobody/internal/world/store"
 )
 
 func TestAdaptWorldMapsCanonToNarrativeWorld(t *testing.T) {
@@ -263,4 +264,69 @@ func TestAdaptWorldEmptyWorldProducesValidBundle(t *testing.T) {
 	}
 
 	_ = strings.TrimSpace(got.Input)
+}
+
+func TestAdaptWorldMemoryFilterCapsMemories(t *testing.T) {
+	t.Parallel()
+
+	w := model.World{
+		ID:   "test_world",
+		Name: "Test",
+		Memory: []model.MemoryRecord{
+			{ID: "m1", Owner: model.MemoryOwner{Kind: model.MemoryOwnerKindWorld}, Content: "High.", Importance: 0.9, TruthStatus: model.TruthStatusTrue},
+			{ID: "m2", Owner: model.MemoryOwner{Kind: model.MemoryOwnerKindWorld}, Content: "Med.", Importance: 0.5, TruthStatus: model.TruthStatusTrue},
+			{ID: "m3", Owner: model.MemoryOwner{Kind: model.MemoryOwnerKindWorld}, Content: "Low.", Importance: 0.1, TruthStatus: model.TruthStatusTrue},
+		},
+	}
+
+	got := AdaptWorld(w, Options{
+		MemoryFilter: &store.MemoryFilter{MaxCount: 2},
+	})
+	if len(got.Memories) != 2 {
+		t.Fatalf("Memories = %d, want 2", len(got.Memories))
+	}
+	if got.Memories[0].ID != "m1" {
+		t.Errorf("first memory should be highest importance, got %s", got.Memories[0].ID)
+	}
+}
+
+func TestAdaptWorldMemoryFilterExcludesSecret(t *testing.T) {
+	t.Parallel()
+
+	w := model.World{
+		ID:   "test_world",
+		Name: "Test",
+		Memory: []model.MemoryRecord{
+			{ID: "m1", Owner: model.MemoryOwner{Kind: model.MemoryOwnerKindWorld}, Content: "Public.", Importance: 0.5, TruthStatus: model.TruthStatusTrue},
+			{ID: "m2", Owner: model.MemoryOwner{Kind: model.MemoryOwnerKindWorld}, Content: "Secret.", Importance: 0.9, TruthStatus: model.TruthStatusSecret},
+		},
+	}
+
+	got := AdaptWorld(w, Options{
+		MemoryFilter: &store.MemoryFilter{ExcludeTruthStatus: []string{model.TruthStatusSecret}},
+	})
+	if len(got.Memories) != 1 {
+		t.Fatalf("Memories = %d, want 1", len(got.Memories))
+	}
+	if got.Memories[0].ID != "m1" {
+		t.Errorf("expected m1, got %s", got.Memories[0].ID)
+	}
+}
+
+func TestAdaptWorldNilMemoryFilterIncludesAll(t *testing.T) {
+	t.Parallel()
+
+	w := model.World{
+		ID:   "test_world",
+		Name: "Test",
+		Memory: []model.MemoryRecord{
+			{ID: "m1", Owner: model.MemoryOwner{Kind: model.MemoryOwnerKindWorld}, Content: "One.", TruthStatus: model.TruthStatusTrue},
+			{ID: "m2", Owner: model.MemoryOwner{Kind: model.MemoryOwnerKindWorld}, Content: "Two.", TruthStatus: model.TruthStatusTrue},
+		},
+	}
+
+	got := AdaptWorld(w, Options{})
+	if len(got.Memories) != 2 {
+		t.Fatalf("Memories = %d, want 2 (nil filter = include all)", len(got.Memories))
+	}
 }

@@ -25,6 +25,9 @@ type EinoGeneratorConfig struct {
 	// use BaseChatModel.Stream internally, accumulating chunks into the full
 	// response. The TextGenerator/ConversationGenerator interface is unchanged.
 	Stream bool
+	// StreamWriter receives each chunk in real-time when streaming is enabled.
+	// If nil, chunks are accumulated silently. Ignored when Stream is false.
+	StreamWriter io.Writer
 }
 
 // NewEinoChatGenerator constructs an EinoGenerator from config, creating the
@@ -46,15 +49,20 @@ func NewEinoChatGenerator(ctx context.Context, cfg EinoGeneratorConfig) (*EinoGe
 	if err != nil {
 		return nil, fmt.Errorf("create eino chat model: %w", err)
 	}
-	return &EinoGenerator{model: m, stream: cfg.Stream}, nil
+	return &EinoGenerator{model: m, stream: cfg.Stream, streamWriter: cfg.StreamWriter}, nil
 }
+
+// TokenUsage mirrors schema.TokenUsage for use outside eino.
+type TokenUsage = schema.TokenUsage
 
 // EinoGenerator adapts an Eino BaseChatModel to the TextGenerator and
 // ConversationGenerator interfaces. Any OpenAI-compatible provider (DeepSeek,
 // local llama.cpp, etc.) can be used through eino-ext/components/model/openai.
 type EinoGenerator struct {
-	model  einomodel.BaseChatModel
-	stream bool
+	model        einomodel.BaseChatModel
+	stream       bool
+	streamWriter io.Writer
+	lastUsage    *schema.TokenUsage
 }
 
 // NewEinoGenerator wraps an existing Eino BaseChatModel as a TextGenerator.
@@ -98,7 +106,22 @@ func (g *EinoGenerator) doGenerate(ctx context.Context, msgs []*schema.Message) 
 	if err != nil {
 		return "", fmt.Errorf("eino generate: %w", err)
 	}
+	g.lastUsage = nil
+	if resp.ResponseMeta != nil {
+		g.lastUsage = resp.ResponseMeta.Usage
+	}
 	return resp.Content, nil
+}
+
+// SetStreamWriter sets or replaces the writer that receives live chunks.
+func (g *EinoGenerator) SetStreamWriter(w io.Writer) {
+	g.streamWriter = w
+}
+
+// LastUsage returns the token usage from the most recent Generate or
+// GenerateRepair call. Returns nil when the provider did not report usage.
+func (g *EinoGenerator) LastUsage() *schema.TokenUsage {
+	return g.lastUsage
 }
 
 func (g *EinoGenerator) doStream(ctx context.Context, msgs []*schema.Message) (string, error) {
@@ -108,6 +131,7 @@ func (g *EinoGenerator) doStream(ctx context.Context, msgs []*schema.Message) (s
 	}
 	defer reader.Close()
 
+	g.lastUsage = nil
 	var buf strings.Builder
 	for {
 		chunk, recvErr := reader.Recv()
@@ -118,6 +142,12 @@ func (g *EinoGenerator) doStream(ctx context.Context, msgs []*schema.Message) (s
 			return "", fmt.Errorf("eino stream recv: %w", recvErr)
 		}
 		buf.WriteString(chunk.Content)
+		if chunk.ResponseMeta != nil && chunk.ResponseMeta.Usage != nil {
+			g.lastUsage = chunk.ResponseMeta.Usage
+		}
+		if g.streamWriter != nil {
+			_, _ = io.WriteString(g.streamWriter, chunk.Content)
+		}
 	}
 	return buf.String(), nil
 }
@@ -131,11 +161,22 @@ var ProviderDefaults = map[string]EinoGeneratorConfig{
 	},
 }
 
+// ProviderGeneratorOption configures optional behavior for NewProviderGenerator.
+type ProviderGeneratorOption func(*EinoGeneratorConfig)
+
+// WithStreamWriter enables streaming and tees chunks to w in real-time.
+func WithStreamWriter(w io.Writer) ProviderGeneratorOption {
+	return func(cfg *EinoGeneratorConfig) {
+		cfg.Stream = true
+		cfg.StreamWriter = w
+	}
+}
+
 // NewProviderGenerator creates an EinoGenerator for a named provider.
 // It applies ProviderDefaults, overriding the model if modelName is non-empty,
 // and reads the API key from the apiKey parameter. Returns an error if the
 // provider is unknown or apiKey is empty.
-func NewProviderGenerator(ctx context.Context, provider, modelName, apiKey string) (*EinoGenerator, error) {
+func NewProviderGenerator(ctx context.Context, provider, modelName, apiKey string, opts ...ProviderGeneratorOption) (*EinoGenerator, error) {
 	defaults, ok := ProviderDefaults[provider]
 	if !ok {
 		return nil, fmt.Errorf("unsupported LLM provider %q", provider)
@@ -144,6 +185,9 @@ func NewProviderGenerator(ctx context.Context, provider, modelName, apiKey strin
 	cfg.APIKey = apiKey
 	if modelName != "" {
 		cfg.Model = modelName
+	}
+	for _, opt := range opts {
+		opt(&cfg)
 	}
 	if cfg.APIKey == "" {
 		return nil, fmt.Errorf("%s provider requires an API key", provider)

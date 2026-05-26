@@ -18,7 +18,7 @@ type WorldDebugContext struct {
 	Threads    []model.WorldThread  `json:"threads"`
 	Rules      []model.Rule         `json:"rules"`
 	EventLog   []model.WorldEvent   `json:"event_log"`
-	EventQueue []model.WorldEvent   `json:"event_queue"`
+	EventQueue []model.EventQueueItem `json:"event_queue"`
 }
 
 // WorldSummary captures top-level world metadata without the collection fields.
@@ -58,7 +58,7 @@ func (v WorldDebugView) Render(w model.World) WorldDebugContext {
 		Threads:    nonNilClone(w.Threads),
 		Rules:      nonNilClone(w.Rules),
 		EventLog:   cloneEvents(w.EventLog),
-		EventQueue: cloneEvents(w.EventQueue),
+		EventQueue: cloneEventQueueItems(w.EventQueue),
 	}
 }
 
@@ -128,6 +128,16 @@ func cloneEvents(events []model.WorldEvent) []model.WorldEvent {
 		out[i].ActorIDs = nonNilClone(out[i].ActorIDs)
 		out[i].TargetIDs = nonNilClone(out[i].TargetIDs)
 		out[i].Effects = cloneEffects(out[i].Effects)
+	}
+	return out
+}
+
+func cloneEventQueueItems(items []model.EventQueueItem) []model.EventQueueItem {
+	out := nonNilClone(items)
+	for i := range out {
+		out[i].Event.ActorIDs = nonNilClone(out[i].Event.ActorIDs)
+		out[i].Event.TargetIDs = nonNilClone(out[i].Event.TargetIDs)
+		out[i].Event.Effects = cloneEffects(out[i].Event.Effects)
 	}
 	return out
 }

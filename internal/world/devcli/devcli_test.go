@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	bridgenarrative "github.com/sizolity/nobody/internal/bridge/narrative"
 	"github.com/sizolity/nobody/internal/narrative/engine"
+	"github.com/sizolity/nobody/internal/world/director"
 	"github.com/sizolity/nobody/internal/world/model"
 	"github.com/sizolity/nobody/internal/world/store"
 	worldview "github.com/sizolity/nobody/internal/world/view"
@@ -38,6 +40,60 @@ func TestRunInitCreatesWorldSnapshot(t *testing.T) {
 	}
 	if world.ID != "test_world" || world.Name != "Test World" {
 		t.Fatalf("world mismatch: %#v", world)
+	}
+}
+
+func TestRunInitWithTemplate(t *testing.T) {
+	t.Parallel()
+	workspace := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{
+		"init",
+		"--workspace", workspace,
+		"--world-id", "my_fantasy",
+		"--name", "My Fantasy World",
+		"--template", "fantasy",
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit = %d, stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "template") {
+		t.Errorf("expected 'template' in output, got: %s", stdout.String())
+	}
+
+	world, err := store.NewFileStore(workspace).LoadSnapshot(context.Background(), "my_fantasy")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if world.Name != "My Fantasy World" {
+		t.Errorf("Name = %q", world.Name)
+	}
+	if len(world.Entities) != 4 {
+		t.Errorf("entities = %d, want 4", len(world.Entities))
+	}
+	if world.Canon.Premise == "" {
+		t.Error("missing premise")
+	}
+	if len(world.Threads) != 1 {
+		t.Errorf("threads = %d, want 1", len(world.Threads))
+	}
+}
+
+func TestRunInitUnknownTemplate(t *testing.T) {
+	t.Parallel()
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{
+		"init",
+		"--workspace", t.TempDir(),
+		"--world-id", "w1",
+		"--name", "W",
+		"--template", "nonexistent",
+	}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("expected exit 2, got %d", code)
+	}
+	if !strings.Contains(stderr.String(), "unknown template") {
+		t.Errorf("expected 'unknown template' in stderr, got: %s", stderr.String())
 	}
 }
 
@@ -1276,8 +1332,406 @@ func TestExecuteBeatPipelineRewriteExhausted(t *testing.T) {
 	if result.Output.Draft.Title != "Scene v2" {
 		t.Errorf("draft = %q, want last rewrite", result.Output.Draft.Title)
 	}
-	if !bytes.Contains(stderr.Bytes(), []byte("remaining (proceeding)")) {
+	if !bytes.Contains(stderr.Bytes(), []byte("remaining")) {
 		t.Errorf("stderr missing 'remaining' message: %s", stderr.String())
+	}
+}
+
+func TestExecuteBeatPipelineCriticalBlocksApply(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	ctx := context.Background()
+	st := store.NewFileStore(workspace)
+
+	world := model.World{
+		ID: "w", Name: "W",
+		Threads: []model.WorldThread{
+			{ID: "t1", Kind: model.ThreadKindQuest, Title: "Quest", Status: model.ThreadStatusActive},
+		},
+	}
+	if err := st.SaveSnapshot(ctx, world); err != nil {
+		t.Fatal(err)
+	}
+
+	bundle := bridgenarrative.AdaptWorld(world, bridgenarrative.Options{RecentEvents: 10})
+	gen := &beatFakeGenerator{responses: []string{
+		`{"beat_id":"beat_crit","objective":"Critical test","target_node_id":"t1"}`,
+		`{"id":"draft_1","beat_id":"beat_crit","title":"Scene","kind":"scene","text":"Text."}`,
+		`{"issues":[{"code":"RULE_VIOLATION","severity":"critical","summary":"Dead character acting."}]}`,
+	}}
+
+	var stderr bytes.Buffer
+	_, err := executeBeatPipeline(ctx, gen, world, bundle, st, 0, &stderr)
+	if err == nil {
+		t.Fatal("expected error when critical issues remain with --apply")
+	}
+	if !bytes.Contains([]byte(err.Error()), []byte("critical")) {
+		t.Errorf("error should mention 'critical': %v", err)
+	}
+}
+
+func TestExecuteBeatPipelineWarningAllowsApply(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	ctx := context.Background()
+	st := store.NewFileStore(workspace)
+
+	world := model.World{
+		ID: "w", Name: "W",
+		Threads: []model.WorldThread{
+			{ID: "t1", Kind: model.ThreadKindQuest, Title: "Quest", Status: model.ThreadStatusActive},
+		},
+	}
+	if err := st.SaveSnapshot(ctx, world); err != nil {
+		t.Fatal(err)
+	}
+
+	bundle := bridgenarrative.AdaptWorld(world, bridgenarrative.Options{RecentEvents: 10})
+	gen := &beatFakeGenerator{responses: []string{
+		`{"beat_id":"beat_warn","objective":"Warning test","target_node_id":"t1"}`,
+		`{"id":"draft_1","beat_id":"beat_warn","title":"Scene","kind":"scene","text":"Text."}`,
+		`{"issues":[{"code":"TONE_MISMATCH","severity":"warning","summary":"Slightly off tone."}]}`,
+		`{"events":[],"memories":[]}`,
+		`{"graph":{"current_node_id":"t1","nodes":[{"id":"t1","type":"quest","status":"active","goal":"g"}]}}`,
+	}}
+
+	var stderr bytes.Buffer
+	_, err := executeBeatPipeline(ctx, gen, world, bundle, st, 0, &stderr)
+	if err != nil {
+		t.Fatalf("warning-only issues should not block apply: %v", err)
+	}
+}
+
+func TestExecuteBeatPipelineCriticalWithoutApplyProceeds(t *testing.T) {
+	t.Parallel()
+
+	world := inspectionWorld()
+	bundle := bridgenarrative.AdaptWorld(world, bridgenarrative.Options{RecentEvents: 10})
+	gen := &beatFakeGenerator{responses: []string{
+		`{"beat_id":"beat_np","objective":"No apply","target_node_id":"thread_open"}`,
+		`{"id":"draft_1","beat_id":"beat_np","title":"Scene","kind":"scene","text":"Text."}`,
+		`{"issues":[{"code":"RULE_VIOLATION","severity":"critical","summary":"Big problem."}]}`,
+		`{"events":[],"memories":[]}`,
+		`{"graph":{"current_node_id":"thread_open","nodes":[{"id":"thread_open","type":"mystery","status":"active","goal":"g"}]}}`,
+	}}
+
+	var stderr bytes.Buffer
+	result, err := executeBeatPipeline(context.Background(), gen, world, bundle, nil, 0, &stderr)
+	if err != nil {
+		t.Fatalf("critical issues without --apply should proceed: %v", err)
+	}
+	if len(result.Output.ContinuityIssues) != 1 {
+		t.Errorf("issues = %d, want 1", len(result.Output.ContinuityIssues))
+	}
+}
+
+func TestExecuteBeatPipelineIncludesTiming(t *testing.T) {
+	t.Parallel()
+
+	world := inspectionWorld()
+	bundle := bridgenarrative.AdaptWorld(world, bridgenarrative.Options{RecentEvents: 10})
+	gen := &beatFakeGenerator{responses: []string{
+		`{"beat_id":"beat_t","objective":"Timing test","target_node_id":"thread_open"}`,
+		`{"id":"d1","beat_id":"beat_t","title":"Scene","kind":"scene","text":"Text."}`,
+		`{"issues":[]}`,
+		`{"events":[],"memories":[]}`,
+		`{"graph":{"current_node_id":"thread_open","nodes":[{"id":"thread_open","type":"mystery","status":"active","goal":"g"}]}}`,
+	}}
+
+	var stderr bytes.Buffer
+	result, err := executeBeatPipeline(context.Background(), gen, world, bundle, nil, 0, &stderr)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+
+	timings := result.Output.Timing
+	if len(timings) < 5 {
+		t.Fatalf("expected >= 5 timing entries, got %d: %+v", len(timings), timings)
+	}
+
+	expectedStages := []string{"plan", "write", "continuity", "memory", "state"}
+	for i, want := range expectedStages {
+		if timings[i].Stage != want {
+			t.Errorf("timing[%d].stage = %q, want %q", i, timings[i].Stage, want)
+		}
+		if timings[i].Ms < 0 {
+			t.Errorf("timing[%d].ms = %f, want >= 0", i, timings[i].Ms)
+		}
+	}
+
+	if !strings.Contains(stderr.String(), "timing:") {
+		t.Errorf("expected timing summary in stderr, got: %s", stderr.String())
+	}
+}
+
+func TestExecuteBeatPipelineTimingIncludesRewrites(t *testing.T) {
+	t.Parallel()
+
+	world := inspectionWorld()
+	bundle := bridgenarrative.AdaptWorld(world, bridgenarrative.Options{RecentEvents: 10})
+	gen := &beatFakeGenerator{responses: []string{
+		`{"beat_id":"beat_rw","objective":"Rewrite timing","target_node_id":"thread_open"}`,
+		`{"id":"d1","beat_id":"beat_rw","title":"Scene","kind":"scene","text":"Text."}`,
+		`{"issues":[{"code":"TONE_MISMATCH","summary":"Off tone."}]}`,
+		`{"id":"d2","beat_id":"beat_rw","title":"Scene v2","kind":"scene","text":"Better."}`,
+		`{"issues":[]}`,
+		`{"events":[],"memories":[]}`,
+		`{"graph":{"current_node_id":"thread_open","nodes":[{"id":"thread_open","type":"mystery","status":"active","goal":"g"}]}}`,
+	}}
+
+	var stderr bytes.Buffer
+	result, err := executeBeatPipeline(context.Background(), gen, world, bundle, nil, 1, &stderr)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+
+	timings := result.Output.Timing
+	stageNames := make([]string, len(timings))
+	for i, t := range timings {
+		stageNames[i] = t.Stage
+	}
+
+	found := false
+	for _, name := range stageNames {
+		if name == "rewrite_1" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected rewrite_1 in timings, got: %v", stageNames)
+	}
+
+	foundRecheck := false
+	for _, name := range stageNames {
+		if name == "recheck_1" {
+			foundRecheck = true
+		}
+	}
+	if !foundRecheck {
+		t.Errorf("expected recheck_1 in timings, got: %v", stageNames)
+	}
+}
+
+func TestExecuteBeatPipelineIncludesTokenUsage(t *testing.T) {
+	t.Parallel()
+
+	world := inspectionWorld()
+	bundle := bridgenarrative.AdaptWorld(world, bridgenarrative.Options{RecentEvents: 10})
+	gen := &beatFakeGeneratorWithUsage{
+		beatFakeGenerator: beatFakeGenerator{responses: []string{
+			`{"beat_id":"beat_u","objective":"Usage test","target_node_id":"thread_open"}`,
+			`{"id":"d1","beat_id":"beat_u","title":"Scene","kind":"scene","text":"Text."}`,
+			`{"issues":[]}`,
+			`{"events":[],"memories":[]}`,
+			`{"graph":{"current_node_id":"thread_open","nodes":[{"id":"thread_open","type":"mystery","status":"active","goal":"g"}]}}`,
+		}},
+		usage: &director.TokenUsage{PromptTokens: 100, CompletionTokens: 50, TotalTokens: 150},
+	}
+
+	var stderr bytes.Buffer
+	result, err := executeBeatPipeline(context.Background(), gen, world, bundle, nil, 0, &stderr)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+
+	for _, st := range result.Output.Timing {
+		if st.TotalTokens != 150 {
+			t.Errorf("timing[%s].total_tokens = %d, want 150", st.Stage, st.TotalTokens)
+		}
+	}
+	if !strings.Contains(stderr.String(), "tokens:") {
+		t.Errorf("expected token summary in stderr, got: %s", stderr.String())
+	}
+}
+
+func TestExecuteBeatPipelineNoUsageWithoutTracker(t *testing.T) {
+	t.Parallel()
+
+	world := inspectionWorld()
+	bundle := bridgenarrative.AdaptWorld(world, bridgenarrative.Options{RecentEvents: 10})
+	gen := &beatFakeGenerator{responses: []string{
+		`{"beat_id":"beat_n","objective":"No usage","target_node_id":"thread_open"}`,
+		`{"id":"d1","beat_id":"beat_n","title":"Scene","kind":"scene","text":"T."}`,
+		`{"issues":[]}`,
+		`{"events":[],"memories":[]}`,
+		`{"graph":{"current_node_id":"thread_open","nodes":[{"id":"thread_open","type":"mystery","status":"active","goal":"g"}]}}`,
+	}}
+
+	var stderr bytes.Buffer
+	result, err := executeBeatPipeline(context.Background(), gen, world, bundle, nil, 0, &stderr)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	for _, st := range result.Output.Timing {
+		if st.TotalTokens != 0 {
+			t.Errorf("timing[%s].total_tokens = %d, want 0", st.Stage, st.TotalTokens)
+		}
+	}
+	if strings.Contains(stderr.String(), "tokens:") {
+		t.Errorf("should not print token summary without usage, got: %s", stderr.String())
+	}
+}
+
+func TestStdinHookProceedsOnEmptyInput(t *testing.T) {
+	t.Parallel()
+
+	stdin := strings.NewReader("\n\n\n")
+	var stderr bytes.Buffer
+	hook := newStdinHook(stdin, &stderr)
+
+	feedback, abort := hook.AfterStage("plan", "Beat plan summary")
+	if abort {
+		t.Fatal("should not abort on empty input")
+	}
+	if feedback != "" {
+		t.Errorf("feedback = %q, want empty", feedback)
+	}
+}
+
+func TestStdinHookAbortsOnAbortInput(t *testing.T) {
+	t.Parallel()
+
+	stdin := strings.NewReader("abort\n")
+	var stderr bytes.Buffer
+	hook := newStdinHook(stdin, &stderr)
+
+	_, abort := hook.AfterStage("plan", "Beat plan summary")
+	if !abort {
+		t.Fatal("should abort on 'abort' input")
+	}
+}
+
+func TestStdinHookReturnsFeedback(t *testing.T) {
+	t.Parallel()
+
+	stdin := strings.NewReader("Make it more dramatic\n")
+	var stderr bytes.Buffer
+	hook := newStdinHook(stdin, &stderr)
+
+	feedback, abort := hook.AfterStage("draft", "Draft text here")
+	if abort {
+		t.Fatal("should not abort")
+	}
+	if feedback != "Make it more dramatic" {
+		t.Errorf("feedback = %q", feedback)
+	}
+}
+
+func TestStdinHookAbortsOnEOF(t *testing.T) {
+	t.Parallel()
+
+	stdin := strings.NewReader("")
+	var stderr bytes.Buffer
+	hook := newStdinHook(stdin, &stderr)
+
+	_, abort := hook.AfterStage("plan", "summary")
+	if !abort {
+		t.Fatal("should abort on EOF")
+	}
+}
+
+type recordingHook struct {
+	stages   []string
+	response []string
+	idx      int
+}
+
+func (h *recordingHook) AfterStage(stage, _ string) (string, bool) {
+	h.stages = append(h.stages, stage)
+	if h.idx < len(h.response) {
+		r := h.response[h.idx]
+		h.idx++
+		if r == "abort" {
+			return "", true
+		}
+		return r, false
+	}
+	return "", false
+}
+
+func TestPipelineWithHookCallsAllStages(t *testing.T) {
+	t.Parallel()
+
+	world := inspectionWorld()
+	bundle := bridgenarrative.AdaptWorld(world, bridgenarrative.Options{RecentEvents: 10})
+
+	gen := &beatFakeGenerator{responses: []string{
+		`{"beat_id":"beat_hook","objective":"Hook test","target_node_id":"thread_open"}`,
+		`{"id":"draft_1","beat_id":"beat_hook","title":"Scene","kind":"scene","text":"Text."}`,
+		`{"issues":[]}`,
+		`{"events":[],"memories":[]}`,
+		`{"graph":{"current_node_id":"thread_open","nodes":[{"id":"thread_open","type":"mystery","status":"active","goal":"g"}]}}`,
+	}}
+
+	hook := &recordingHook{response: []string{"", "", ""}}
+	var stderr bytes.Buffer
+	_, err := executeBeatPipelineWithHook(context.Background(), gen, world, bundle, beatPipelineOpts{
+		maxRewrites: 0, hook: hook,
+	}, &stderr)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+
+	want := []string{"plan", "draft", "continuity"}
+	if len(hook.stages) != len(want) {
+		t.Fatalf("stages = %v, want %v", hook.stages, want)
+	}
+	for i, s := range want {
+		if hook.stages[i] != s {
+			t.Errorf("stage[%d] = %q, want %q", i, hook.stages[i], s)
+		}
+	}
+}
+
+func TestPipelineWithHookAbortAfterPlan(t *testing.T) {
+	t.Parallel()
+
+	world := inspectionWorld()
+	bundle := bridgenarrative.AdaptWorld(world, bridgenarrative.Options{RecentEvents: 10})
+
+	gen := &beatFakeGenerator{responses: []string{
+		`{"beat_id":"beat_a","objective":"Abort","target_node_id":"thread_open"}`,
+	}}
+
+	hook := &recordingHook{response: []string{"abort"}}
+	var stderr bytes.Buffer
+	_, err := executeBeatPipelineWithHook(context.Background(), gen, world, bundle, beatPipelineOpts{
+		maxRewrites: 0, hook: hook,
+	}, &stderr)
+	if err == nil {
+		t.Fatal("expected error on abort")
+	}
+	if !bytes.Contains([]byte(err.Error()), []byte("aborted")) {
+		t.Errorf("error = %v, want 'aborted'", err)
+	}
+	if len(hook.stages) != 1 || hook.stages[0] != "plan" {
+		t.Errorf("stages = %v, want [plan]", hook.stages)
+	}
+}
+
+func TestPipelineWithHookFeedbackPropagates(t *testing.T) {
+	t.Parallel()
+
+	world := inspectionWorld()
+	bundle := bridgenarrative.AdaptWorld(world, bridgenarrative.Options{RecentEvents: 10})
+
+	gen := &beatFakeGenerator{responses: []string{
+		`{"beat_id":"beat_fb","objective":"Feedback","target_node_id":"thread_open"}`,
+		`{"id":"draft_1","beat_id":"beat_fb","title":"Scene","kind":"scene","text":"Text."}`,
+		`{"issues":[]}`,
+		`{"events":[],"memories":[]}`,
+		`{"graph":{"current_node_id":"thread_open","nodes":[{"id":"thread_open","type":"mystery","status":"active","goal":"g"}]}}`,
+	}}
+
+	hook := &recordingHook{response: []string{"focus on Alice", "", ""}}
+	var stderr bytes.Buffer
+	_, err := executeBeatPipelineWithHook(context.Background(), gen, world, bundle, beatPipelineOpts{
+		maxRewrites: 0, hook: hook,
+	}, &stderr)
+	if err != nil {
+		t.Fatalf("error: %v", err)
 	}
 }
 
@@ -1393,6 +1847,15 @@ func (g *beatFakeGenerator) Generate(_ context.Context, _, _ string) (string, er
 	return resp, nil
 }
 
+type beatFakeGeneratorWithUsage struct {
+	beatFakeGenerator
+	usage *director.TokenUsage
+}
+
+func (g *beatFakeGeneratorWithUsage) LastUsage() *director.TokenUsage {
+	return g.usage
+}
+
 func inspectionWorld() model.World {
 	return model.World{
 		ID:   "test_world",
@@ -1438,5 +1901,741 @@ func inspectionWorld() model.World {
 				TruthStatus: model.TruthStatusUnknown,
 			},
 		},
+	}
+}
+
+func TestRunLineageRequiresFlags(t *testing.T) {
+	t.Parallel()
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{"lineage"}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("exit = %d, want 2", code)
+	}
+}
+
+func TestRunLineageUnknownQuery(t *testing.T) {
+	t.Parallel()
+	workspace := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{"lineage", "--workspace", workspace, "--world-id", "w", "--query", "bogus"}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("exit = %d, want 2", code)
+	}
+}
+
+func TestRunLineageAncestorsAndChildren(t *testing.T) {
+	t.Parallel()
+	workspace := t.TempDir()
+	ctx := context.Background()
+	st := store.NewFileStore(workspace)
+
+	root := model.World{ID: "root", Name: "Root"}
+	child := model.World{
+		ID: "child_a", Name: "Child",
+		Metadata: model.WorldMetadata{Fork: &model.ForkInfo{ParentWorldID: "root", ForkSequence: 1}},
+	}
+	if err := st.SaveSnapshot(ctx, root); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SaveSnapshot(ctx, child); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Run(ctx, []string{"lineage", "--workspace", workspace, "--world-id", "child_a", "--query", "ancestors"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
+	}
+
+	var result struct {
+		WorldID string `json:"world_id"`
+		Query   string `json:"query"`
+		Nodes   []struct {
+			WorldID string `json:"world_id"`
+		} `json:"nodes"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, stdout.String())
+	}
+	if result.Query != "ancestors" {
+		t.Errorf("query = %q, want ancestors", result.Query)
+	}
+	if len(result.Nodes) != 1 || result.Nodes[0].WorldID != "root" {
+		t.Errorf("nodes = %v, want [root]", result.Nodes)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Run(ctx, []string{"lineage", "--workspace", workspace, "--world-id", "root", "--query", "children"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("children exit = %d", code)
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("unmarshal children: %v", err)
+	}
+	if len(result.Nodes) != 1 || result.Nodes[0].WorldID != "child_a" {
+		t.Errorf("children nodes = %v, want [child_a]", result.Nodes)
+	}
+}
+
+func TestRunDiffRequiresFlags(t *testing.T) {
+	t.Parallel()
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{"diff"}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("exit = %d, want 2", code)
+	}
+}
+
+func TestRunDiffShowsChanges(t *testing.T) {
+	t.Parallel()
+	workspace := t.TempDir()
+	ctx := context.Background()
+	st := store.NewFileStore(workspace)
+
+	a := model.World{
+		ID: "wa", Name: "World A",
+		Clock: model.WorldClock{Sequence: 3},
+		Entities: map[model.EntityID]model.Entity{
+			"e1": {ID: "e1", Type: "character", Name: "Alice"},
+		},
+		Threads: []model.WorldThread{
+			{ID: "t1", Kind: model.ThreadKindQuest, Title: "Quest", Status: model.ThreadStatusActive},
+		},
+	}
+	b := model.World{
+		ID: "wb", Name: "World B",
+		Clock: model.WorldClock{Sequence: 7},
+		Entities: map[model.EntityID]model.Entity{
+			"e1": {ID: "e1", Type: "character", Name: "Alice the Brave"},
+			"e2": {ID: "e2", Type: "location", Name: "Market"},
+		},
+		Threads: []model.WorldThread{
+			{ID: "t1", Kind: model.ThreadKindQuest, Title: "Quest", Status: model.ThreadStatusResolved},
+		},
+	}
+	if err := st.SaveSnapshot(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SaveSnapshot(ctx, b); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Run(ctx, []string{"diff", "--workspace", workspace, "--world-a", "wa", "--world-b", "wb"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
+	}
+
+	var diff struct {
+		WorldA   string `json:"world_a"`
+		WorldB   string `json:"world_b"`
+		ClockA   int64  `json:"clock_a"`
+		ClockB   int64  `json:"clock_b"`
+		Entities struct {
+			Added   []string `json:"added"`
+			Changed []string `json:"changed"`
+		} `json:"entities"`
+		Threads struct {
+			StatusChanged []struct {
+				ID      string `json:"id"`
+				StatusA string `json:"status_a"`
+				StatusB string `json:"status_b"`
+			} `json:"status_changed"`
+		} `json:"threads"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &diff); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, stdout.String())
+	}
+	if diff.ClockA != 3 || diff.ClockB != 7 {
+		t.Errorf("clocks = %d/%d, want 3/7", diff.ClockA, diff.ClockB)
+	}
+	if len(diff.Entities.Added) != 1 || diff.Entities.Added[0] != "e2" {
+		t.Errorf("entities added = %v, want [e2]", diff.Entities.Added)
+	}
+	if len(diff.Entities.Changed) != 1 || diff.Entities.Changed[0] != "e1" {
+		t.Errorf("entities changed = %v, want [e1]", diff.Entities.Changed)
+	}
+	if len(diff.Threads.StatusChanged) != 1 {
+		t.Fatalf("status_changed = %d, want 1", len(diff.Threads.StatusChanged))
+	}
+	if diff.Threads.StatusChanged[0].StatusB != model.ThreadStatusResolved {
+		t.Errorf("status_b = %q", diff.Threads.StatusChanged[0].StatusB)
+	}
+}
+
+func TestRunDiffTextFormat(t *testing.T) {
+	t.Parallel()
+	workspace := t.TempDir()
+	ctx := context.Background()
+	st := store.NewFileStore(workspace)
+
+	a := model.World{
+		ID: "wa", Name: "World A",
+		Clock:    model.WorldClock{Sequence: 3},
+		Entities: map[model.EntityID]model.Entity{"e1": {ID: "e1", Type: "character", Name: "Alice"}},
+	}
+	b := model.World{
+		ID: "wb", Name: "World B",
+		Clock: model.WorldClock{Sequence: 5},
+		Entities: map[model.EntityID]model.Entity{
+			"e1": {ID: "e1", Type: "character", Name: "Alice the Brave"},
+			"e2": {ID: "e2", Type: "location", Name: "Market"},
+		},
+	}
+	if err := st.SaveSnapshot(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SaveSnapshot(ctx, b); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Run(ctx, []string{"diff", "--workspace", workspace, "--world-a", "wa", "--world-b", "wb", "--format", "text"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "diff wa → wb") {
+		t.Errorf("missing header:\n%s", out)
+	}
+	if !strings.Contains(out, "clock: 3 → 5") {
+		t.Errorf("missing clock:\n%s", out)
+	}
+	if !strings.Contains(out, "+ entity e2") {
+		t.Errorf("missing added entity:\n%s", out)
+	}
+	if !strings.Contains(out, "~ entity e1") {
+		t.Errorf("missing changed entity:\n%s", out)
+	}
+}
+
+func TestRunMergeRequiresFlags(t *testing.T) {
+	t.Parallel()
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{"merge"}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("exit = %d, want 2", code)
+	}
+}
+
+func TestRunMergeNoConflict(t *testing.T) {
+	t.Parallel()
+	workspace := t.TempDir()
+	ctx := context.Background()
+	st := store.NewFileStore(workspace)
+
+	base := model.World{
+		ID: "base", Name: "Base",
+		Entities: map[model.EntityID]model.Entity{
+			"e1": {ID: "e1", Type: "character", Name: "Alice"},
+		},
+	}
+	source := model.World{
+		ID: "source", Name: "Source",
+		Entities: map[model.EntityID]model.Entity{
+			"e1": {ID: "e1", Type: "character", Name: "Alice"},
+			"e2": {ID: "e2", Type: "location", Name: "Market"},
+		},
+	}
+	target := model.World{
+		ID: "target", Name: "Target",
+		Entities: map[model.EntityID]model.Entity{
+			"e1": {ID: "e1", Type: "character", Name: "Alice"},
+		},
+	}
+	for _, w := range []model.World{base, source, target} {
+		if err := st.SaveSnapshot(ctx, w); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Run(ctx, []string{"merge", "--workspace", workspace, "--base", "base", "--source", "source", "--target", "target"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
+	}
+
+	var result struct {
+		Report struct {
+			Conflicts     []any    `json:"conflicts"`
+			EntitiesAdded []string `json:"entities_added"`
+		} `json:"report"`
+		Merged *struct {
+			ID string `json:"id"`
+		} `json:"merged"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("unmarshal: %v\noutput: %s", err, stdout.String())
+	}
+	if len(result.Report.Conflicts) != 0 {
+		t.Errorf("conflicts = %d, want 0", len(result.Report.Conflicts))
+	}
+	if len(result.Report.EntitiesAdded) != 1 || result.Report.EntitiesAdded[0] != "e2" {
+		t.Errorf("entities_added = %v, want [e2]", result.Report.EntitiesAdded)
+	}
+	if result.Merged == nil || result.Merged.ID != "target" {
+		t.Error("merged world should be present without --apply")
+	}
+}
+
+func TestRunMergeApplyBlockedByConflict(t *testing.T) {
+	t.Parallel()
+	workspace := t.TempDir()
+	ctx := context.Background()
+	st := store.NewFileStore(workspace)
+
+	base := model.World{
+		ID: "base", Name: "Base",
+		Entities: map[model.EntityID]model.Entity{
+			"e1": {ID: "e1", Type: "character", Name: "Alice"},
+		},
+	}
+	source := model.World{
+		ID: "source", Name: "Source",
+		Entities: map[model.EntityID]model.Entity{
+			"e1": {ID: "e1", Type: "character", Name: "Alice X"},
+		},
+	}
+	target := model.World{
+		ID: "target", Name: "Target",
+		Entities: map[model.EntityID]model.Entity{
+			"e1": {ID: "e1", Type: "character", Name: "Alice Y"},
+		},
+	}
+	for _, w := range []model.World{base, source, target} {
+		if err := st.SaveSnapshot(ctx, w); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Run(ctx, []string{"merge", "--workspace", workspace, "--base", "base", "--source", "source", "--target", "target", "--apply"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0 (outputs report)", code)
+	}
+	if !bytes.Contains(stderr.Bytes(), []byte("refusing to apply")) {
+		t.Errorf("stderr should mention refusing to apply: %s", stderr.String())
+	}
+}
+
+func TestRunMergeApplySucceeds(t *testing.T) {
+	t.Parallel()
+	workspace := t.TempDir()
+	ctx := context.Background()
+	st := store.NewFileStore(workspace)
+
+	base := model.World{
+		ID: "base", Name: "Base", Clock: model.WorldClock{Sequence: 3},
+		Entities: map[model.EntityID]model.Entity{
+			"e1": {ID: "e1", Type: "character", Name: "Alice"},
+		},
+	}
+	source := model.World{
+		ID: "source", Name: "Source", Clock: model.WorldClock{Sequence: 6},
+		Entities: map[model.EntityID]model.Entity{
+			"e1": {ID: "e1", Type: "character", Name: "Alice"},
+			"e2": {ID: "e2", Type: "location", Name: "Market"},
+		},
+	}
+	target := model.World{
+		ID: "target", Name: "Target", Clock: model.WorldClock{Sequence: 5},
+		Entities: map[model.EntityID]model.Entity{
+			"e1": {ID: "e1", Type: "character", Name: "Alice"},
+		},
+	}
+	for _, w := range []model.World{base, source, target} {
+		if err := st.SaveSnapshot(ctx, w); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Run(ctx, []string{"merge", "--workspace", workspace, "--base", "base", "--source", "source", "--target", "target", "--apply"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
+	}
+
+	updated, err := st.LoadSnapshot(ctx, "target")
+	if err != nil {
+		t.Fatalf("LoadSnapshot: %v", err)
+	}
+	if _, ok := updated.Entities["e2"]; !ok {
+		t.Error("e2 should have been merged into target")
+	}
+	if updated.Clock.Sequence != 6 {
+		t.Errorf("clock = %d, want 6", updated.Clock.Sequence)
+	}
+}
+
+func TestRunValidateRequiresFlags(t *testing.T) {
+	t.Parallel()
+	var stdout, stderr bytes.Buffer
+	code := runValidate(context.Background(), []string{}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("expected exit 2, got %d", code)
+	}
+}
+
+func TestRunValidateCleanWorld(t *testing.T) {
+	t.Parallel()
+	workspace := t.TempDir()
+	w := model.World{
+		ID: "w1", Name: "Clean",
+		Entities: map[model.EntityID]model.Entity{
+			"char_a": {ID: "char_a", Type: "character", Name: "Alice"},
+		},
+		Relations: []model.Relation{},
+		Facts:     []model.Fact{{ID: "f1", SubjectID: "char_a", Predicate: "alive", Value: model.Value{Kind: model.ValueKindBoolean, Raw: true}}},
+	}
+	fs := store.NewFileStore(workspace)
+	if err := fs.SaveSnapshot(context.Background(), w); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := runValidate(context.Background(), []string{"--workspace", workspace, "--world-id", "w1"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d; stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "clean") {
+		t.Errorf("expected 'clean' in stderr, got: %s", stderr.String())
+	}
+}
+
+func TestRunValidateBrokenRef(t *testing.T) {
+	t.Parallel()
+	workspace := t.TempDir()
+	w := model.World{
+		ID: "w1", Name: "Broken",
+		Entities: map[model.EntityID]model.Entity{
+			"char_a": {ID: "char_a", Type: "character", Name: "Alice"},
+		},
+		Relations: []model.Relation{
+			{ID: "rel_1", Type: "ally", SourceID: "char_a", TargetID: "nonexistent"},
+		},
+	}
+	fs := store.NewFileStore(workspace)
+	if err := fs.SaveSnapshot(context.Background(), w); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := runValidate(context.Background(), []string{"--workspace", workspace, "--world-id", "w1"}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("expected exit 1, got %d", code)
+	}
+	if !strings.Contains(stderr.String(), "error") {
+		t.Errorf("expected 'error' in stderr, got: %s", stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "nonexistent") {
+		t.Errorf("expected 'nonexistent' in output, got: %s", stdout.String())
+	}
+}
+
+func TestRunExportRequiresFlags(t *testing.T) {
+	t.Parallel()
+	var stdout, stderr bytes.Buffer
+	code := runExport(context.Background(), []string{}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("expected exit 2, got %d", code)
+	}
+}
+
+func TestRunExportImportRoundTrip(t *testing.T) {
+	t.Parallel()
+	workspace := t.TempDir()
+	ctx := context.Background()
+
+	w := model.World{
+		ID: "w1", Name: "Test World",
+		Entities: map[model.EntityID]model.Entity{
+			"char_a": {ID: "char_a", Type: "character", Name: "Alice"},
+		},
+		Facts: []model.Fact{
+			{ID: "f1", SubjectID: "char_a", Predicate: "alive", Value: model.Value{Kind: model.ValueKindBoolean, Raw: true}},
+		},
+		Clock: model.WorldClock{Sequence: 3},
+	}
+	fs := store.NewFileStore(workspace)
+	if err := fs.SaveSnapshot(ctx, w); err != nil {
+		t.Fatal(err)
+	}
+
+	archivePath := filepath.Join(t.TempDir(), "w1.tar.gz")
+
+	var expOut, expErr bytes.Buffer
+	code := runExport(ctx, []string{"--workspace", workspace, "--world-id", "w1", "--output", archivePath}, &expOut, &expErr)
+	if code != 0 {
+		t.Fatalf("export exit %d; stderr=%s", code, expErr.String())
+	}
+	if !strings.Contains(expErr.String(), "exported") {
+		t.Errorf("expected 'exported' in stderr, got: %s", expErr.String())
+	}
+
+	var impOut, impErr bytes.Buffer
+	code = runImport(ctx, []string{"--workspace", workspace, "--input", archivePath, "--new-id", "w1_copy"}, &impOut, &impErr)
+	if code != 0 {
+		t.Fatalf("import exit %d; stderr=%s", code, impErr.String())
+	}
+	if !strings.Contains(impErr.String(), "imported") {
+		t.Errorf("expected 'imported' in stderr, got: %s", impErr.String())
+	}
+	if !strings.Contains(impOut.String(), "w1_copy") {
+		t.Errorf("expected 'w1_copy' in output, got: %s", impOut.String())
+	}
+
+	loaded, err := fs.LoadSnapshot(ctx, "w1_copy")
+	if err != nil {
+		t.Fatalf("load imported: %v", err)
+	}
+	if loaded.Name != "Test World" {
+		t.Errorf("name = %q", loaded.Name)
+	}
+	if len(loaded.Entities) != 1 {
+		t.Errorf("entities = %d", len(loaded.Entities))
+	}
+}
+
+func TestRunImportRequiresFlags(t *testing.T) {
+	t.Parallel()
+	var stdout, stderr bytes.Buffer
+	code := runImport(context.Background(), []string{}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("expected exit 2, got %d", code)
+	}
+}
+
+func TestRunDrainQueueRequiresFlags(t *testing.T) {
+	t.Parallel()
+	var stdout, stderr bytes.Buffer
+	code := runDrainQueue(context.Background(), []string{}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("expected exit 2, got %d", code)
+	}
+}
+
+func TestRunDrainQueueEmptyQueue(t *testing.T) {
+	t.Parallel()
+	workspace := t.TempDir()
+	ctx := context.Background()
+	w := model.World{
+		ID: "w1", Name: "Test",
+		Entities: map[model.EntityID]model.Entity{},
+	}
+	if err := store.NewFileStore(workspace).SaveSnapshot(ctx, w); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := runDrainQueue(ctx, []string{"--workspace", workspace, "--world-id", "w1"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d; stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "empty") {
+		t.Errorf("expected 'empty' in stderr, got: %s", stderr.String())
+	}
+}
+
+func TestRunDrainQueueProcessesEvents(t *testing.T) {
+	t.Parallel()
+	workspace := t.TempDir()
+	ctx := context.Background()
+	w := model.World{
+		ID: "w1", Name: "Test",
+		Entities: map[model.EntityID]model.Entity{},
+		EventQueue: []model.EventQueueItem{
+			{Event: model.WorldEvent{ID: "q1", Type: model.EventTypeNote, Source: model.EventSourceRuntime}, Priority: 10},
+			{Event: model.WorldEvent{ID: "q2", Type: model.EventTypeNote, Source: model.EventSourceRuntime}, Priority: 5},
+		},
+	}
+	if err := store.NewFileStore(workspace).SaveSnapshot(ctx, w); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := runDrainQueue(ctx, []string{"--workspace", workspace, "--world-id", "w1"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d; stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "2 applied") {
+		t.Errorf("expected '2 applied' in stderr, got: %s", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "saved") {
+		t.Errorf("expected 'saved' in stderr, got: %s", stderr.String())
+	}
+
+	loaded, err := store.NewFileStore(workspace).LoadSnapshot(ctx, "w1")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(loaded.EventQueue) != 0 {
+		t.Errorf("queue should be empty, got %d", len(loaded.EventQueue))
+	}
+	if len(loaded.EventLog) != 2 {
+		t.Errorf("event log = %d, want 2", len(loaded.EventLog))
+	}
+}
+
+func TestRunDrainQueueWithLimit(t *testing.T) {
+	t.Parallel()
+	workspace := t.TempDir()
+	ctx := context.Background()
+	w := model.World{
+		ID: "w1", Name: "Test",
+		Entities: map[model.EntityID]model.Entity{},
+		EventQueue: []model.EventQueueItem{
+			{Event: model.WorldEvent{ID: "q1", Type: model.EventTypeNote, Source: model.EventSourceRuntime}},
+			{Event: model.WorldEvent{ID: "q2", Type: model.EventTypeNote, Source: model.EventSourceRuntime}},
+			{Event: model.WorldEvent{ID: "q3", Type: model.EventTypeNote, Source: model.EventSourceRuntime}},
+		},
+	}
+	if err := store.NewFileStore(workspace).SaveSnapshot(ctx, w); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := runDrainQueue(ctx, []string{"--workspace", workspace, "--world-id", "w1", "--limit", "2"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d; stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "2 applied") {
+		t.Errorf("expected '2 applied' in stderr, got: %s", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "1 remaining") {
+		t.Errorf("expected '1 remaining' in stderr, got: %s", stderr.String())
+	}
+}
+
+func TestRunDrainQueueDryRun(t *testing.T) {
+	t.Parallel()
+	workspace := t.TempDir()
+	ctx := context.Background()
+	w := model.World{
+		ID: "w1", Name: "Test",
+		Entities: map[model.EntityID]model.Entity{},
+		EventQueue: []model.EventQueueItem{
+			{Event: model.WorldEvent{ID: "q1", Type: model.EventTypeNote, Source: model.EventSourceRuntime}},
+		},
+	}
+	if err := store.NewFileStore(workspace).SaveSnapshot(ctx, w); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := runDrainQueue(ctx, []string{"--workspace", workspace, "--world-id", "w1", "--dry-run"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d; stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "dry-run") {
+		t.Errorf("expected 'dry-run' in stderr, got: %s", stderr.String())
+	}
+
+	loaded, err := store.NewFileStore(workspace).LoadSnapshot(ctx, "w1")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(loaded.EventQueue) != 1 {
+		t.Errorf("queue should still have 1 item (dry-run), got %d", len(loaded.EventQueue))
+	}
+}
+
+func TestRunHistoryRequiresFlags(t *testing.T) {
+	t.Parallel()
+	var stdout, stderr bytes.Buffer
+	code := runHistory(context.Background(), nil, &stdout, &stderr)
+	if code != 2 {
+		t.Errorf("expected exit 2, got %d", code)
+	}
+}
+
+func TestRunHistoryTextOutput(t *testing.T) {
+	t.Parallel()
+	workspace := t.TempDir()
+	ctx := context.Background()
+	w := model.World{
+		ID: "w1", Name: "History",
+		Entities: map[model.EntityID]model.Entity{
+			"char1": {ID: "char1", Name: "Alice", Type: "character"},
+		},
+		EventLog: []model.WorldEvent{
+			{ID: "ev1", Type: model.EventTypeNote, Source: model.EventSourceDirector, Description: "Storm approached.", ActorIDs: []model.EntityID{"char1"}},
+			{ID: "ev2", Type: model.EventTypeMove, Source: model.EventSourceRuntime, Description: "Alice moved.", LocationID: "char1"},
+		},
+	}
+	if err := store.NewFileStore(workspace).SaveSnapshot(ctx, w); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := runHistory(ctx, []string{"--workspace", workspace, "--world-id", "w1"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit %d; stderr=%s", code, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "Alice") {
+		t.Errorf("expected resolved name 'Alice':\n%s", out)
+	}
+	if !strings.Contains(out, "Storm approached.") {
+		t.Errorf("expected description:\n%s", out)
+	}
+	if !strings.Contains(out, "[move]") {
+		t.Errorf("expected event type:\n%s", out)
+	}
+}
+
+func TestRunHistoryJSONOutput(t *testing.T) {
+	t.Parallel()
+	workspace := t.TempDir()
+	ctx := context.Background()
+	w := model.World{
+		ID: "w1", Name: "J",
+		Entities: map[model.EntityID]model.Entity{},
+		EventLog: []model.WorldEvent{
+			{ID: "ev1", Type: model.EventTypeNote, Source: model.EventSourceUser, Intent: "look around"},
+		},
+	}
+	if err := store.NewFileStore(workspace).SaveSnapshot(ctx, w); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := runHistory(ctx, []string{"--workspace", workspace, "--world-id", "w1", "--format", "json"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit %d; stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"summary": "look around"`) {
+		t.Errorf("missing JSON summary:\n%s", stdout.String())
+	}
+}
+
+func TestRunHistoryLastNFilter(t *testing.T) {
+	t.Parallel()
+	workspace := t.TempDir()
+	ctx := context.Background()
+	w := model.World{
+		ID: "w1", Name: "N",
+		Entities: map[model.EntityID]model.Entity{},
+		EventLog: []model.WorldEvent{
+			{ID: "ev1", Type: model.EventTypeNote, Source: model.EventSourceDirector, Description: "First."},
+			{ID: "ev2", Type: model.EventTypeNote, Source: model.EventSourceDirector, Description: "Second."},
+			{ID: "ev3", Type: model.EventTypeNote, Source: model.EventSourceDirector, Description: "Third."},
+		},
+	}
+	if err := store.NewFileStore(workspace).SaveSnapshot(ctx, w); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := runHistory(ctx, []string{"--workspace", workspace, "--world-id", "w1", "--last", "1"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit %d; stderr=%s", code, stderr.String())
+	}
+	out := stdout.String()
+	if strings.Contains(out, "First.") {
+		t.Errorf("--last 1 should not show first event:\n%s", out)
+	}
+	if !strings.Contains(out, "Third.") {
+		t.Errorf("--last 1 should show last event:\n%s", out)
 	}
 }

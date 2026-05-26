@@ -12,21 +12,29 @@ import (
 	narr "github.com/sizolity/nobody/internal/narrative"
 	"github.com/sizolity/nobody/internal/narrative/engine"
 	"github.com/sizolity/nobody/internal/world/model"
+	"github.com/sizolity/nobody/internal/world/store"
 )
 
 type Options struct {
 	UserInput    string
 	RecentEvents int
+	// MemoryFilter optionally filters memories before they enter the
+	// context bundle. When nil, all memories are included.
+	MemoryFilter *store.MemoryFilter
 }
 
 func AdaptWorld(w model.World, opts Options) engine.ContextBundle {
+	memories := w.Memory
+	if opts.MemoryFilter != nil {
+		memories = opts.MemoryFilter.Filter(memories)
+	}
 	return engine.ContextBundle{
 		World:      adaptCanon(w),
 		Graph:      adaptThreads(w.Threads),
 		Characters: adaptCharacters(w.Entities),
 		Locations:  adaptLocations(w.Entities),
 		Events:     adaptEvents(w.EventLog, opts.RecentEvents),
-		Memories:   adaptMemories(w.Memory),
+		Memories:   adaptMemories(memories),
 		Input:      opts.UserInput,
 	}
 }

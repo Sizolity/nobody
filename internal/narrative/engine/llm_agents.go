@@ -170,8 +170,8 @@ Return JSON:
 
 {
   "issues": [
-    {"code": "LOCATION_MISMATCH", "summary": "Character X is described in the tower, but was last seen at the market."},
-    {"code": "RULE_VIOLATION", "summary": "Magic cannot be used at night per world rules, but the draft has a spell cast at midnight."}
+    {"code": "LOCATION_MISMATCH", "severity": "critical", "summary": "Character X is described in the tower, but was last seen at the market."},
+    {"code": "TONE_MISMATCH", "severity": "warning", "summary": "Draft is slightly more lighthearted than the declared dark tone."}
   ]
 }
 
@@ -183,6 +183,11 @@ Issue codes (use the most specific one):
 - TIMELINE_ERROR: events happen in impossible chronological order
 - TONE_MISMATCH: draft tone deviates significantly from the world's declared tone
 - OTHER: anything else
+
+Severity levels:
+- "critical": factual contradiction that would break world consistency (wrong location, dead character acting, rule violation, impossible timeline)
+- "warning": noticeable but non-fatal inconsistency (mild tone shift, minor detail mismatch)
+- "info": stylistic or optional improvement suggestion
 
 Rules:
 - Only report genuine contradictions with the provided context; do not invent issues.

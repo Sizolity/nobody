@@ -80,6 +80,11 @@ func NewEinoChatGenerator(ctx context.Context, cfg EinoGeneratorConfig) (*EinoGe
 	return internal.NewEinoChatGenerator(ctx, cfg)
 }
 
-func NewProviderGenerator(ctx context.Context, provider, modelName, apiKey string) (*EinoGenerator, error) {
-	return internal.NewProviderGenerator(ctx, provider, modelName, apiKey)
+type TokenUsage = internal.TokenUsage
+type ProviderGeneratorOption = internal.ProviderGeneratorOption
+
+var WithStreamWriter = internal.WithStreamWriter
+
+func NewProviderGenerator(ctx context.Context, provider, modelName, apiKey string, opts ...ProviderGeneratorOption) (*EinoGenerator, error) {
+	return internal.NewProviderGenerator(ctx, provider, modelName, apiKey, opts...)
 }

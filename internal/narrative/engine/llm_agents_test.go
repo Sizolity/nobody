@@ -422,6 +422,62 @@ func TestLLMContinuityAgentCustomPrompt(t *testing.T) {
 	}
 }
 
+func TestContinuityReportHasCritical(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		issues []ContinuityIssue
+		want   bool
+	}{
+		{"empty", nil, false},
+		{"warning only", []ContinuityIssue{{Code: "TONE_MISMATCH", Severity: SeverityWarning}}, false},
+		{"info only", []ContinuityIssue{{Code: "OTHER", Severity: SeverityInfo}}, false},
+		{"critical present", []ContinuityIssue{
+			{Code: "TONE_MISMATCH", Severity: SeverityWarning},
+			{Code: "RULE_VIOLATION", Severity: SeverityCritical},
+		}, true},
+		{"all critical", []ContinuityIssue{{Code: "LOCATION_MISMATCH", Severity: SeverityCritical}}, true},
+		{"no severity defaults non-critical", []ContinuityIssue{{Code: "OTHER"}}, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			report := ContinuityReport{Issues: tc.issues}
+			if got := report.HasCritical(); got != tc.want {
+				t.Errorf("HasCritical() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestLLMContinuityAgentParsesSeverity(t *testing.T) {
+	t.Parallel()
+
+	resp := `{"issues":[{"code":"RULE_VIOLATION","severity":"critical","summary":"Dead character acting."},{"code":"TONE_MISMATCH","severity":"warning","summary":"Tone slightly off."}]}`
+	gen := &fakeTextGenerator{response: resp}
+	agent := NewLLMContinuityAgent(gen)
+
+	report, err := agent.Check(context.Background(), ContextBundle{
+		World: narrative.World{ID: "w", Title: "T"},
+	}, narrative.Draft{ID: "d", BeatID: "b", Title: "T", Kind: "scene", Text: "x"})
+	if err != nil {
+		t.Fatalf("Check error: %v", err)
+	}
+	if len(report.Issues) != 2 {
+		t.Fatalf("issues = %d, want 2", len(report.Issues))
+	}
+	if report.Issues[0].Severity != SeverityCritical {
+		t.Errorf("issue[0].severity = %q, want critical", report.Issues[0].Severity)
+	}
+	if report.Issues[1].Severity != SeverityWarning {
+		t.Errorf("issue[1].severity = %q, want warning", report.Issues[1].Severity)
+	}
+	if !report.HasCritical() {
+		t.Error("HasCritical should be true")
+	}
+}
+
 // --- LLM Memory Agent tests ---
 
 func TestLLMMemoryAgentParsesEventsAndMemories(t *testing.T) {
