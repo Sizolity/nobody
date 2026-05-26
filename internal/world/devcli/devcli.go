@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 
+	bridgenarrative "github.com/sizolity/nobody/internal/bridge/narrative"
 	"github.com/sizolity/nobody/internal/world/director"
 	directorconfig "github.com/sizolity/nobody/internal/world/director/config"
 	"github.com/sizolity/nobody/internal/world/model"
@@ -19,7 +20,7 @@ import (
 
 func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: nobody-world <init|apply-event|step-script|step-reconcile|step-config|run|debug-view|narrative-view|show>")
+		fmt.Fprintln(stderr, "usage: nobody-world <init|apply-event|step-script|step-reconcile|step-config|run|bridge-context|debug-view|narrative-view|show>")
 		return 2
 	}
 	switch args[0] {
@@ -35,6 +36,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runStepConfig(ctx, args[1:], stdout, stderr)
 	case "run":
 		return runRun(ctx, args[1:], stdout, stderr)
+	case "bridge-context":
+		return runBridgeContext(ctx, args[1:], stdout, stderr)
 	case "debug-view":
 		return runDebugView(ctx, args[1:], stdout, stderr)
 	case "narrative-view":
@@ -225,6 +228,31 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "ran %d steps on world %s (%d events applied)\n",
 		result.StepsCompleted, result.World.ID, len(result.AllAppliedEvents))
 	return 0
+}
+
+func runBridgeContext(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	fs := newFlagSet("bridge-context", stderr)
+	workspace := fs.String("workspace", "", "workspace directory")
+	worldID := fs.String("world-id", "", "world id")
+	recentEvents := fs.Int("recent-events", 0, "number of recent events to include; <=0 includes all")
+	userInput := fs.String("input", "", "optional user input text")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *workspace == "" || *worldID == "" {
+		fmt.Fprintln(stderr, "bridge-context requires --workspace and --world-id")
+		return 2
+	}
+	world, err := store.NewFileStore(*workspace).LoadSnapshot(ctx, *worldID)
+	if err != nil {
+		fmt.Fprintf(stderr, "bridge-context failed: %v\n", err)
+		return 1
+	}
+	bundle := bridgenarrative.AdaptWorld(world, bridgenarrative.Options{
+		RecentEvents: *recentEvents,
+		UserInput:    *userInput,
+	})
+	return writeJSON(stdout, stderr, "encode bridge context failed", bundle)
 }
 
 func runShow(ctx context.Context, args []string, stdout, stderr io.Writer) int {

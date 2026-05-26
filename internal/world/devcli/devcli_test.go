@@ -633,6 +633,61 @@ func TestRunRunPersistsMultipleConfiguredSteps(t *testing.T) {
 	}
 }
 
+func TestRunBridgeContextOutputsNarrativeBundle(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	ctx := context.Background()
+	st := store.NewFileStore(workspace)
+	if err := st.SaveSnapshot(ctx, model.World{
+		ID:   "test_world",
+		Name: "The Fall of Kingdoms",
+		Canon: model.Canon{
+			Genre: []string{"fantasy"},
+			Laws:  []string{"Magic requires sacrifice"},
+		},
+		Entities: map[model.EntityID]model.Entity{
+			"char_alice": {ID: "char_alice", Type: "character", Name: "Alice"},
+			"tavern":     {ID: "tavern", Type: "location", Name: "The Tavern"},
+		},
+		Threads: []model.WorldThread{
+			{ID: "thread_1", Kind: model.ThreadKindMystery, Title: "Find the killer", Status: model.ThreadStatusActive},
+		},
+	}); err != nil {
+		t.Fatalf("SaveSnapshot returned error: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Run(ctx, []string{
+		"bridge-context",
+		"--workspace", workspace,
+		"--world-id", "test_world",
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("Run exit code = %d, stderr=%s", code, stderr.String())
+	}
+
+	var bundle map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &bundle); err != nil {
+		t.Fatalf("output is not valid JSON: %v\n%s", err, stdout.String())
+	}
+	world, ok := bundle["world"].(map[string]any)
+	if !ok {
+		t.Fatalf("bundle missing world: %#v", bundle)
+	}
+	if world["title"] != "The Fall of Kingdoms" {
+		t.Fatalf("world.title = %v", world["title"])
+	}
+	characters, ok := bundle["characters"].([]any)
+	if !ok || len(characters) != 1 {
+		t.Fatalf("characters mismatch: %#v", bundle["characters"])
+	}
+	locations, ok := bundle["locations"].([]any)
+	if !ok || len(locations) != 1 {
+		t.Fatalf("locations mismatch: %#v", bundle["locations"])
+	}
+}
+
 func writeTestJSON(t *testing.T, path string, v any) {
 	t.Helper()
 	data, err := json.Marshal(v)
