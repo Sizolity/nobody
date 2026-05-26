@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"math/rand"
 
+	"github.com/cloudwego/eino/schema"
+
 	"github.com/sizolity/nobody/internal/world/director"
 	"github.com/sizolity/nobody/internal/world/model"
 )
@@ -29,9 +31,12 @@ type DirectorConfig struct {
 	Cases        []director.ReconcileCase   `json:"cases,omitempty"`
 	Entries      []director.EventTableEntry `json:"entries,omitempty"`
 	Seed         *int64                     `json:"seed,omitempty"`
-	SystemPrompt string                     `json:"system_prompt,omitempty"`
-	Provider     string                     `json:"provider,omitempty"`
-	Model        string                     `json:"model,omitempty"`
+	SystemPrompt         string                     `json:"system_prompt,omitempty"`
+	SystemPromptTemplate string                     `json:"system_prompt_template,omitempty"`
+	TemplateFormat       string                     `json:"template_format,omitempty"`
+	Provider             string                     `json:"provider,omitempty"`
+	Model                string                     `json:"model,omitempty"`
+	MaxRepairAttempts    *int                       `json:"max_repair_attempts,omitempty"`
 }
 
 // GeneratorFactory builds a TextGenerator from the provider and model
@@ -112,12 +117,39 @@ func buildDirector(cfg DirectorConfig, opt LoadOptions) (director.Director, erro
 		if err != nil {
 			return nil, fmt.Errorf("generator factory: %w", err)
 		}
+		var promptTpl *director.PromptTemplate
+		if cfg.SystemPromptTemplate != "" {
+			ft, ftErr := resolveTemplateFormat(cfg.TemplateFormat)
+			if ftErr != nil {
+				return nil, ftErr
+			}
+			var parseErr error
+			promptTpl, parseErr = director.ParsePromptTemplateWithFormat(cfg.SystemPromptTemplate, ft)
+			if parseErr != nil {
+				return nil, fmt.Errorf("system_prompt_template: %w", parseErr)
+			}
+		}
 		return director.NewLLMDirector(cfg.ID, director.LLMDirectorConfig{
-			SystemPrompt: cfg.SystemPrompt,
-			Generator:    gen,
+			SystemPrompt:      cfg.SystemPrompt,
+			PromptTemplate:    promptTpl,
+			Generator:         gen,
+			MaxRepairAttempts: cfg.MaxRepairAttempts,
 		}), nil
 	default:
 		return nil, fmt.Errorf("unsupported director kind %q", cfg.Kind)
+	}
+}
+
+func resolveTemplateFormat(s string) (schema.FormatType, error) {
+	switch s {
+	case "", "go_template":
+		return schema.GoTemplate, nil
+	case "fstring":
+		return schema.FString, nil
+	case "jinja2":
+		return schema.Jinja2, nil
+	default:
+		return 0, fmt.Errorf("unsupported template_format %q (use go_template, fstring, or jinja2)", s)
 	}
 }
 

@@ -3,7 +3,7 @@ module github.com/sizolity/nobody
 go 1.25.0
 
 require (
-	github.com/cloudwego/eino v0.8.7
+	github.com/cloudwego/eino v0.8.13
 	github.com/cloudwego/eino-ext/components/embedding/openai v0.0.0-20260416081055-0ebab92e14f2
 	github.com/cloudwego/eino-ext/components/model/openai v0.1.13
 	github.com/stretchr/testify v1.11.1

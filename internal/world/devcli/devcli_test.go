@@ -765,6 +765,245 @@ func writeTestJSON(t *testing.T, path string, v any) {
 	}
 }
 
+func TestRunCheckpointAndRollback(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	ctx := context.Background()
+	st := store.NewFileStore(workspace)
+	world := model.World{
+		ID:    "test_world",
+		Name:  "Before Checkpoint",
+		Clock: model.WorldClock{Sequence: 5},
+		EventLog: []model.WorldEvent{
+			{ID: "event_1", Type: model.EventTypeNote, Source: model.EventSourceTest},
+		},
+	}
+	if err := st.SaveSnapshot(ctx, world); err != nil {
+		t.Fatalf("SaveSnapshot returned error: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Run(ctx, []string{
+		"checkpoint",
+		"--workspace", workspace,
+		"--world-id", "test_world",
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("checkpoint exit code = %d, stderr=%s", code, stderr.String())
+	}
+	if !bytes.Contains(stdout.Bytes(), []byte("sequence 5")) {
+		t.Fatalf("checkpoint output missing sequence: %s", stdout.String())
+	}
+
+	world.Name = "After Change"
+	world.Clock.Sequence = 10
+	world.EventLog = append(world.EventLog, model.WorldEvent{
+		ID: "event_2", Type: model.EventTypeNote, Source: model.EventSourceTest,
+	})
+	if err := st.SaveSnapshot(ctx, world); err != nil {
+		t.Fatalf("SaveSnapshot returned error: %v", err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Run(ctx, []string{
+		"rollback",
+		"--workspace", workspace,
+		"--world-id", "test_world",
+		"5",
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("rollback exit code = %d, stderr=%s", code, stderr.String())
+	}
+	if !bytes.Contains(stdout.Bytes(), []byte("sequence 5")) {
+		t.Fatalf("rollback output missing sequence: %s", stdout.String())
+	}
+
+	restored, err := st.LoadSnapshot(ctx, "test_world")
+	if err != nil {
+		t.Fatalf("LoadSnapshot returned error: %v", err)
+	}
+	if restored.Name != "Before Checkpoint" {
+		t.Fatalf("world not rolled back: name = %q", restored.Name)
+	}
+	if len(restored.EventLog) != 1 {
+		t.Fatalf("event log not rolled back: %d events", len(restored.EventLog))
+	}
+}
+
+func TestRunListCheckpoints(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	ctx := context.Background()
+	st := store.NewFileStore(workspace)
+	world := model.World{ID: "test_world", Name: "Test World", Clock: model.WorldClock{Sequence: 3}}
+	if err := st.SaveSnapshot(ctx, world); err != nil {
+		t.Fatalf("SaveSnapshot returned error: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Run(ctx, []string{
+		"list-checkpoints",
+		"--workspace", workspace,
+		"--world-id", "test_world",
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("list-checkpoints exit code = %d, stderr=%s", code, stderr.String())
+	}
+	if !bytes.Contains(stdout.Bytes(), []byte("no checkpoints")) {
+		t.Fatalf("expected 'no checkpoints', got: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Run(ctx, []string{
+		"checkpoint",
+		"--workspace", workspace,
+		"--world-id", "test_world",
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("checkpoint exit code = %d, stderr=%s", code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Run(ctx, []string{
+		"list-checkpoints",
+		"--workspace", workspace,
+		"--world-id", "test_world",
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("list-checkpoints exit code = %d, stderr=%s", code, stderr.String())
+	}
+	if !bytes.Contains(stdout.Bytes(), []byte("checkpoint at sequence 3")) {
+		t.Fatalf("expected checkpoint listing, got: %s", stdout.String())
+	}
+}
+
+func TestRunForkFromCurrentState(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	ctx := context.Background()
+	st := store.NewFileStore(workspace)
+	world := model.World{
+		ID:    "source_w",
+		Name:  "Source",
+		Clock: model.WorldClock{Sequence: 4},
+		Entities: map[model.EntityID]model.Entity{
+			"hero": {ID: "hero", Type: "character", Name: "Hero"},
+		},
+	}
+	if err := st.SaveSnapshot(ctx, world); err != nil {
+		t.Fatalf("SaveSnapshot returned error: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Run(ctx, []string{
+		"fork",
+		"--workspace", workspace,
+		"--world-id", "source_w",
+		"--new-id", "branch_a",
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("fork exit code = %d, stderr=%s", code, stderr.String())
+	}
+	if !bytes.Contains(stdout.Bytes(), []byte("branch_a")) {
+		t.Fatalf("fork output missing new ID: %s", stdout.String())
+	}
+	if !bytes.Contains(stdout.Bytes(), []byte("sequence 4")) {
+		t.Fatalf("fork output missing sequence: %s", stdout.String())
+	}
+
+	loaded, err := st.LoadSnapshot(ctx, "branch_a")
+	if err != nil {
+		t.Fatalf("LoadSnapshot branch_a returned error: %v", err)
+	}
+	if loaded.Name != "Source" {
+		t.Fatalf("forked name = %q", loaded.Name)
+	}
+	if loaded.Metadata.Fork == nil {
+		t.Fatal("forked world missing ForkInfo")
+	}
+}
+
+func TestRunForkFromCheckpoint(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	ctx := context.Background()
+	st := store.NewFileStore(workspace)
+	world := model.World{
+		ID:    "source_w",
+		Name:  "At Seq 2",
+		Clock: model.WorldClock{Sequence: 2},
+	}
+	if err := st.SaveSnapshot(ctx, world); err != nil {
+		t.Fatalf("SaveSnapshot returned error: %v", err)
+	}
+	if _, err := st.SaveCheckpoint(ctx, "source_w"); err != nil {
+		t.Fatalf("SaveCheckpoint returned error: %v", err)
+	}
+
+	world.Name = "At Seq 7"
+	world.Clock.Sequence = 7
+	if err := st.SaveSnapshot(ctx, world); err != nil {
+		t.Fatalf("SaveSnapshot returned error: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Run(ctx, []string{
+		"fork",
+		"--workspace", workspace,
+		"--world-id", "source_w",
+		"--new-id", "branch_b",
+		"--at-sequence", "2",
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("fork exit code = %d, stderr=%s", code, stderr.String())
+	}
+
+	loaded, err := st.LoadSnapshot(ctx, "branch_b")
+	if err != nil {
+		t.Fatalf("LoadSnapshot branch_b returned error: %v", err)
+	}
+	if loaded.Name != "At Seq 2" {
+		t.Fatalf("forked name = %q, want 'At Seq 2'", loaded.Name)
+	}
+}
+
+func TestRunForkRequiresNewID(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{
+		"fork",
+		"--workspace", workspace,
+		"--world-id", "source",
+	}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("expected exit code 2, got %d", code)
+	}
+}
+
+func TestRunRollbackRequiresSequenceArg(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{
+		"rollback",
+		"--workspace", workspace,
+		"--world-id", "test_world",
+	}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("expected exit code 2, got %d", code)
+	}
+}
+
 func inspectionWorld() model.World {
 	return model.World{
 		ID:   "test_world",

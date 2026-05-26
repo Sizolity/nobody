@@ -57,7 +57,26 @@ func (g *DeepSeekGenerator) Generate(ctx context.Context, systemPrompt, userProm
 		messages = append(messages, chatMessage{Role: "system", Content: systemPrompt})
 	}
 	messages = append(messages, chatMessage{Role: "user", Content: userPrompt})
+	return g.doChat(ctx, messages)
+}
 
+// GenerateRepair implements ConversationGenerator. It sends a 4-message
+// conversation: system → original user → previous assistant response →
+// repair instruction, preserving full context for the LLM to self-correct.
+func (g *DeepSeekGenerator) GenerateRepair(ctx context.Context, systemPrompt, originalUser, previousAssistant, repairUser string) (string, error) {
+	messages := make([]chatMessage, 0, 4)
+	if systemPrompt != "" {
+		messages = append(messages, chatMessage{Role: "system", Content: systemPrompt})
+	}
+	messages = append(messages,
+		chatMessage{Role: "user", Content: originalUser},
+		chatMessage{Role: "assistant", Content: previousAssistant},
+		chatMessage{Role: "user", Content: repairUser},
+	)
+	return g.doChat(ctx, messages)
+}
+
+func (g *DeepSeekGenerator) doChat(ctx context.Context, messages []chatMessage) (string, error) {
 	reqBody := chatRequest{
 		Model:    g.model,
 		Messages: messages,

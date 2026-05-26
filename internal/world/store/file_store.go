@@ -329,6 +329,102 @@ func (s *FileStore) LoadThreads(_ context.Context, worldID string) ([]model.Worl
 	return threads, nil
 }
 
+func (s *FileStore) SaveCheckpoint(ctx context.Context, worldID string) (int64, error) {
+	world, err := s.LoadSnapshot(ctx, worldID)
+	if err != nil {
+		return 0, fmt.Errorf("load snapshot for checkpoint: %w", err)
+	}
+	seq := world.Clock.Sequence
+	cpDir := s.checkpointDir(worldID, seq)
+	if err := os.MkdirAll(cpDir, 0o755); err != nil {
+		return 0, err
+	}
+	cpStore := &FileStore{root: filepath.Join(cpDir)}
+	if err := cpStore.SaveSnapshot(ctx, world); err != nil {
+		return 0, fmt.Errorf("save checkpoint: %w", err)
+	}
+	return seq, nil
+}
+
+func (s *FileStore) LoadCheckpoint(ctx context.Context, worldID string, sequence int64) (model.World, error) {
+	cpDir := s.checkpointDir(worldID, sequence)
+	cpStore := &FileStore{root: filepath.Join(cpDir)}
+	world, err := cpStore.LoadSnapshot(ctx, worldID)
+	if err != nil {
+		return model.World{}, fmt.Errorf("load checkpoint %d: %w", sequence, err)
+	}
+	return world, nil
+}
+
+func (s *FileStore) ListCheckpoints(_ context.Context, worldID string) ([]int64, error) {
+	if err := model.ValidateID(worldID); err != nil {
+		return nil, err
+	}
+	dir := filepath.Join(s.worldDir(worldID), "checkpoints")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []int64{}, nil
+		}
+		return nil, err
+	}
+	var seqs []int64
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		var seq int64
+		if _, err := fmt.Sscanf(entry.Name(), "%d", &seq); err == nil {
+			seqs = append(seqs, seq)
+		}
+	}
+	return seqs, nil
+}
+
+func (s *FileStore) checkpointDir(worldID string, sequence int64) string {
+	return filepath.Join(s.worldDir(worldID), "checkpoints", fmt.Sprintf("%d", sequence))
+}
+
+// ForkWorld creates a new world by copying the source world's state.
+// If atSequence > 0, it forks from the checkpoint at that sequence.
+// If atSequence <= 0, it forks from the current snapshot.
+// The new world gets a ForkInfo recording its parent lineage.
+func (s *FileStore) ForkWorld(ctx context.Context, sourceWorldID, newWorldID string, atSequence int64) (model.World, error) {
+	if err := model.ValidateID(sourceWorldID); err != nil {
+		return model.World{}, fmt.Errorf("source world id: %w", err)
+	}
+	if err := model.ValidateID(newWorldID); err != nil {
+		return model.World{}, fmt.Errorf("new world id: %w", err)
+	}
+	if sourceWorldID == newWorldID {
+		return model.World{}, fmt.Errorf("source and new world IDs must differ")
+	}
+
+	var world model.World
+	var err error
+	if atSequence > 0 {
+		world, err = s.LoadCheckpoint(ctx, sourceWorldID, atSequence)
+	} else {
+		world, err = s.LoadSnapshot(ctx, sourceWorldID)
+		atSequence = world.Clock.Sequence
+	}
+	if err != nil {
+		return model.World{}, fmt.Errorf("load source for fork: %w", err)
+	}
+
+	world.ID = model.WorldID(newWorldID)
+	world.Metadata.Fork = &model.ForkInfo{
+		ParentWorldID: model.WorldID(sourceWorldID),
+		ForkSequence:  atSequence,
+	}
+	world.EventQueue = nil
+
+	if err := s.SaveSnapshot(ctx, world); err != nil {
+		return model.World{}, fmt.Errorf("save forked world: %w", err)
+	}
+	return world, nil
+}
+
 func (s *FileStore) worldDir(worldID string) string {
 	return filepath.Join(s.root, worldID)
 }

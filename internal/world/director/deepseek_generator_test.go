@@ -190,3 +190,99 @@ func TestDeepSeekGeneratorImplementsTextGenerator(t *testing.T) {
 	t.Parallel()
 	var _ TextGenerator = (*DeepSeekGenerator)(nil)
 }
+
+func TestDeepSeekGeneratorImplementsConversationGenerator(t *testing.T) {
+	t.Parallel()
+	var _ ConversationGenerator = (*DeepSeekGenerator)(nil)
+}
+
+func TestDeepSeekGeneratorRepairSendsFourMessages(t *testing.T) {
+	t.Parallel()
+
+	var gotReq chatRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &gotReq)
+		json.NewEncoder(w).Encode(chatResponse{
+			Choices: []chatChoice{{Message: chatMessage{Role: "assistant", Content: "fixed"}}},
+		})
+	}))
+	defer srv.Close()
+
+	g := NewDeepSeekGenerator(DeepSeekGeneratorConfig{
+		BaseURL:    srv.URL,
+		HTTPClient: srv.Client(),
+	})
+
+	got, err := g.GenerateRepair(context.Background(),
+		"system", "original user", "bad assistant", "please fix")
+	if err != nil {
+		t.Fatalf("GenerateRepair error: %v", err)
+	}
+	if got != "fixed" {
+		t.Fatalf("content = %q", got)
+	}
+	if len(gotReq.Messages) != 4 {
+		t.Fatalf("messages count = %d, want 4", len(gotReq.Messages))
+	}
+	expected := []chatMessage{
+		{Role: "system", Content: "system"},
+		{Role: "user", Content: "original user"},
+		{Role: "assistant", Content: "bad assistant"},
+		{Role: "user", Content: "please fix"},
+	}
+	for i, want := range expected {
+		if gotReq.Messages[i] != want {
+			t.Errorf("messages[%d] = %+v, want %+v", i, gotReq.Messages[i], want)
+		}
+	}
+}
+
+func TestDeepSeekGeneratorRepairOmitsSystemWhenEmpty(t *testing.T) {
+	t.Parallel()
+
+	var gotReq chatRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &gotReq)
+		json.NewEncoder(w).Encode(chatResponse{
+			Choices: []chatChoice{{Message: chatMessage{Content: "ok"}}},
+		})
+	}))
+	defer srv.Close()
+
+	g := NewDeepSeekGenerator(DeepSeekGeneratorConfig{
+		BaseURL:    srv.URL,
+		HTTPClient: srv.Client(),
+	})
+
+	_, err := g.GenerateRepair(context.Background(), "", "user", "bad", "fix")
+	if err != nil {
+		t.Fatalf("GenerateRepair error: %v", err)
+	}
+	if len(gotReq.Messages) != 3 {
+		t.Fatalf("messages count = %d, want 3 (no system)", len(gotReq.Messages))
+	}
+	if gotReq.Messages[0].Role != "user" {
+		t.Fatalf("first message role = %q, want user", gotReq.Messages[0].Role)
+	}
+}
+
+func TestDeepSeekGeneratorRepairReturnsHTTPError(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "server error", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	g := NewDeepSeekGenerator(DeepSeekGeneratorConfig{
+		BaseURL:    srv.URL,
+		HTTPClient: srv.Client(),
+	})
+
+	_, err := g.GenerateRepair(context.Background(), "sys", "user", "bad", "fix")
+	if err == nil {
+		t.Fatal("expected error for 500 response")
+	}
+}

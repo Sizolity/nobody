@@ -270,6 +270,209 @@ func TestRunnerRunDoesNotSaveOnFirstStepFailure(t *testing.T) {
 	}
 }
 
+func TestRunnerCheckpointAndRollback(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := store.NewFileStore(t.TempDir())
+	initial := model.World{
+		ID:    "test_world",
+		Name:  "Test World",
+		Clock: model.WorldClock{Sequence: 3},
+		Entities: map[model.EntityID]model.Entity{
+			"hero": {ID: "hero", Type: "character", Name: "Hero"},
+		},
+	}
+	if err := st.SaveSnapshot(ctx, initial); err != nil {
+		t.Fatalf("SaveSnapshot returned error: %v", err)
+	}
+
+	r := New(st, worldruntime.WithoutRules())
+
+	cp, err := r.Checkpoint(ctx, "test_world")
+	if err != nil {
+		t.Fatalf("Checkpoint returned error: %v", err)
+	}
+	if cp.Sequence != 3 {
+		t.Fatalf("Checkpoint sequence = %d, want 3", cp.Sequence)
+	}
+
+	event := model.WorldEvent{
+		ID:     "event_1",
+		Type:   model.EventTypeNote,
+		Source: model.EventSourceTest,
+	}
+	advanced, err := r.ApplyEvent(ctx, "test_world", event)
+	if err != nil {
+		t.Fatalf("ApplyEvent returned error: %v", err)
+	}
+	if advanced.Clock.Sequence != 3 {
+		t.Logf("Clock.Sequence after event = %d", advanced.Clock.Sequence)
+	}
+	if len(advanced.EventLog) != 1 {
+		t.Fatalf("expected 1 event in log, got %d", len(advanced.EventLog))
+	}
+
+	rb, err := r.Rollback(ctx, "test_world", 3)
+	if err != nil {
+		t.Fatalf("Rollback returned error: %v", err)
+	}
+	if rb.RestoredSequence != 3 {
+		t.Fatalf("Rollback restored sequence = %d, want 3", rb.RestoredSequence)
+	}
+	if len(rb.World.EventLog) != 0 {
+		t.Fatalf("expected empty event log after rollback, got %d", len(rb.World.EventLog))
+	}
+
+	saved, err := st.LoadSnapshot(ctx, "test_world")
+	if err != nil {
+		t.Fatalf("LoadSnapshot returned error: %v", err)
+	}
+	if len(saved.EventLog) != 0 {
+		t.Fatalf("expected empty event log in store after rollback, got %d", len(saved.EventLog))
+	}
+}
+
+func TestRunnerListCheckpoints(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := store.NewFileStore(t.TempDir())
+	initial := model.World{ID: "test_world", Name: "Test World", Clock: model.WorldClock{Sequence: 1}}
+	if err := st.SaveSnapshot(ctx, initial); err != nil {
+		t.Fatalf("SaveSnapshot returned error: %v", err)
+	}
+
+	r := New(st, worldruntime.WithoutRules())
+
+	seqs, err := r.ListCheckpoints(ctx, "test_world")
+	if err != nil {
+		t.Fatalf("ListCheckpoints returned error: %v", err)
+	}
+	if len(seqs) != 0 {
+		t.Fatalf("expected 0 checkpoints, got %d", len(seqs))
+	}
+
+	if _, err := r.Checkpoint(ctx, "test_world"); err != nil {
+		t.Fatalf("Checkpoint returned error: %v", err)
+	}
+
+	seqs, err = r.ListCheckpoints(ctx, "test_world")
+	if err != nil {
+		t.Fatalf("ListCheckpoints returned error: %v", err)
+	}
+	if len(seqs) != 1 || seqs[0] != 1 {
+		t.Fatalf("expected [1], got %v", seqs)
+	}
+}
+
+func TestRunnerCheckpointRejectsNonCheckpointStore(t *testing.T) {
+	t.Parallel()
+
+	r := Runner{store: &nonCheckpointStore{}}
+	if _, err := r.Checkpoint(context.Background(), "w"); err == nil {
+		t.Fatal("expected error for non-checkpoint store")
+	}
+	if _, err := r.Rollback(context.Background(), "w", 0); err == nil {
+		t.Fatal("expected error for non-checkpoint store")
+	}
+	if _, err := r.ListCheckpoints(context.Background(), "w"); err == nil {
+		t.Fatal("expected error for non-checkpoint store")
+	}
+}
+
+type nonCheckpointStore struct{}
+
+func (s *nonCheckpointStore) LoadSnapshot(context.Context, string) (model.World, error) {
+	return model.World{}, nil
+}
+func (s *nonCheckpointStore) SaveSnapshot(context.Context, model.World) error {
+	return nil
+}
+
+func TestRunnerForkFromCurrentState(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := store.NewFileStore(t.TempDir())
+	initial := model.World{
+		ID:    "source",
+		Name:  "Source World",
+		Clock: model.WorldClock{Sequence: 5},
+		Entities: map[model.EntityID]model.Entity{
+			"hero": {ID: "hero", Type: "character", Name: "Hero"},
+		},
+	}
+	if err := st.SaveSnapshot(ctx, initial); err != nil {
+		t.Fatalf("SaveSnapshot returned error: %v", err)
+	}
+
+	r := New(st, worldruntime.WithoutRules())
+	result, err := r.Fork(ctx, "source", "branch_x", 0)
+	if err != nil {
+		t.Fatalf("Fork returned error: %v", err)
+	}
+	if string(result.World.ID) != "branch_x" {
+		t.Fatalf("forked ID = %q", result.World.ID)
+	}
+	if result.ForkSequence != 5 {
+		t.Fatalf("fork sequence = %d, want 5", result.ForkSequence)
+	}
+
+	loaded, err := st.LoadSnapshot(ctx, "branch_x")
+	if err != nil {
+		t.Fatalf("LoadSnapshot branch_x returned error: %v", err)
+	}
+	if len(loaded.Entities) != 1 {
+		t.Fatalf("forked entities count = %d", len(loaded.Entities))
+	}
+}
+
+func TestRunnerForkFromCheckpoint(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := store.NewFileStore(t.TempDir())
+	initial := model.World{
+		ID:    "source",
+		Name:  "At Seq 2",
+		Clock: model.WorldClock{Sequence: 2},
+	}
+	if err := st.SaveSnapshot(ctx, initial); err != nil {
+		t.Fatalf("SaveSnapshot returned error: %v", err)
+	}
+	if _, err := st.SaveCheckpoint(ctx, "source"); err != nil {
+		t.Fatalf("SaveCheckpoint returned error: %v", err)
+	}
+
+	initial.Name = "At Seq 8"
+	initial.Clock.Sequence = 8
+	if err := st.SaveSnapshot(ctx, initial); err != nil {
+		t.Fatalf("SaveSnapshot returned error: %v", err)
+	}
+
+	r := New(st, worldruntime.WithoutRules())
+	result, err := r.Fork(ctx, "source", "branch_y", 2)
+	if err != nil {
+		t.Fatalf("Fork returned error: %v", err)
+	}
+	if result.World.Name != "At Seq 2" {
+		t.Fatalf("forked name = %q, want 'At Seq 2'", result.World.Name)
+	}
+	if result.ForkSequence != 2 {
+		t.Fatalf("fork sequence = %d, want 2", result.ForkSequence)
+	}
+}
+
+func TestRunnerForkRejectsNonForkStore(t *testing.T) {
+	t.Parallel()
+
+	r := Runner{store: &nonCheckpointStore{}}
+	if _, err := r.Fork(context.Background(), "a", "b", 0); err == nil {
+		t.Fatal("expected error for non-fork store")
+	}
+}
+
 func TestRunnerStepConsumesQueueAndSavesRemainingQueue(t *testing.T) {
 	t.Parallel()
 

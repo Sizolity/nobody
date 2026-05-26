@@ -77,9 +77,16 @@ type WorldTime struct {
 }
 
 type WorldMetadata struct {
-	SchemaVersion string   `json:"schema_version,omitempty"`
-	Source        string   `json:"source,omitempty"`
-	Tags          []string `json:"tags,omitempty"`
+	SchemaVersion string    `json:"schema_version,omitempty"`
+	Source        string    `json:"source,omitempty"`
+	Tags          []string  `json:"tags,omitempty"`
+	Fork          *ForkInfo `json:"fork,omitempty"`
+}
+
+// ForkInfo records the lineage of a forked world.
+type ForkInfo struct {
+	ParentWorldID WorldID `json:"parent_world_id"`
+	ForkSequence  int64   `json:"fork_sequence"`
 }
 
 type EventQueueItem struct {

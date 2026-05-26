@@ -432,6 +432,280 @@ func TestFileStoreSaveSnapshotRejectsInvalidQueuedEvents(t *testing.T) {
 	}
 }
 
+func TestFileStoreSaveAndLoadCheckpoint(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := NewFileStore(t.TempDir())
+	world := model.World{
+		ID:    "test_world",
+		Name:  "Test World",
+		Clock: model.WorldClock{Sequence: 5},
+		Entities: map[model.EntityID]model.Entity{
+			"hero": {ID: "hero", Type: "character", Name: "Hero"},
+		},
+		Facts: []model.Fact{{
+			ID:        "fact_1",
+			SubjectID: "hero",
+			Predicate: "alive",
+			Value:     model.Value{Kind: model.ValueKindBoolean, Raw: true},
+		}},
+		EventLog: []model.WorldEvent{
+			{ID: "event_1", Type: model.EventTypeNote, Source: model.EventSourceTest},
+		},
+	}
+	if err := st.SaveSnapshot(ctx, world); err != nil {
+		t.Fatalf("SaveSnapshot returned error: %v", err)
+	}
+
+	seq, err := st.SaveCheckpoint(ctx, "test_world")
+	if err != nil {
+		t.Fatalf("SaveCheckpoint returned error: %v", err)
+	}
+	if seq != 5 {
+		t.Fatalf("SaveCheckpoint seq = %d, want 5", seq)
+	}
+
+	got, err := st.LoadCheckpoint(ctx, "test_world", 5)
+	if err != nil {
+		t.Fatalf("LoadCheckpoint returned error: %v", err)
+	}
+	if got.Clock.Sequence != 5 {
+		t.Fatalf("checkpoint sequence = %d, want 5", got.Clock.Sequence)
+	}
+	if len(got.Entities) != 1 || got.Entities["hero"].Name != "Hero" {
+		t.Fatalf("checkpoint entities mismatch: %#v", got.Entities)
+	}
+	if len(got.Facts) != 1 || got.Facts[0].ID != "fact_1" {
+		t.Fatalf("checkpoint facts mismatch: %#v", got.Facts)
+	}
+	if len(got.EventLog) != 1 || got.EventLog[0].ID != "event_1" {
+		t.Fatalf("checkpoint event log mismatch: %#v", got.EventLog)
+	}
+}
+
+func TestFileStoreListCheckpoints(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := NewFileStore(t.TempDir())
+	world := model.World{ID: "test_world", Name: "Test World"}
+	if err := st.SaveSnapshot(ctx, world); err != nil {
+		t.Fatalf("SaveSnapshot returned error: %v", err)
+	}
+
+	seqs, err := st.ListCheckpoints(ctx, "test_world")
+	if err != nil {
+		t.Fatalf("ListCheckpoints returned error: %v", err)
+	}
+	if len(seqs) != 0 {
+		t.Fatalf("expected no checkpoints, got %v", seqs)
+	}
+
+	world.Clock.Sequence = 2
+	if err := st.SaveSnapshot(ctx, world); err != nil {
+		t.Fatalf("SaveSnapshot returned error: %v", err)
+	}
+	if _, err := st.SaveCheckpoint(ctx, "test_world"); err != nil {
+		t.Fatalf("SaveCheckpoint returned error: %v", err)
+	}
+
+	world.Clock.Sequence = 7
+	if err := st.SaveSnapshot(ctx, world); err != nil {
+		t.Fatalf("SaveSnapshot returned error: %v", err)
+	}
+	if _, err := st.SaveCheckpoint(ctx, "test_world"); err != nil {
+		t.Fatalf("SaveCheckpoint returned error: %v", err)
+	}
+
+	seqs, err = st.ListCheckpoints(ctx, "test_world")
+	if err != nil {
+		t.Fatalf("ListCheckpoints returned error: %v", err)
+	}
+	if len(seqs) != 2 {
+		t.Fatalf("expected 2 checkpoints, got %v", seqs)
+	}
+}
+
+func TestFileStoreCheckpointIsIndependentOfCurrentSnapshot(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := NewFileStore(t.TempDir())
+	world := model.World{
+		ID:    "test_world",
+		Name:  "Version A",
+		Clock: model.WorldClock{Sequence: 3},
+	}
+	if err := st.SaveSnapshot(ctx, world); err != nil {
+		t.Fatalf("SaveSnapshot returned error: %v", err)
+	}
+	if _, err := st.SaveCheckpoint(ctx, "test_world"); err != nil {
+		t.Fatalf("SaveCheckpoint returned error: %v", err)
+	}
+
+	world.Name = "Version B"
+	world.Clock.Sequence = 10
+	if err := st.SaveSnapshot(ctx, world); err != nil {
+		t.Fatalf("SaveSnapshot returned error: %v", err)
+	}
+
+	cp, err := st.LoadCheckpoint(ctx, "test_world", 3)
+	if err != nil {
+		t.Fatalf("LoadCheckpoint returned error: %v", err)
+	}
+	if cp.Name != "Version A" {
+		t.Fatalf("checkpoint name = %q, want Version A", cp.Name)
+	}
+
+	current, err := st.LoadSnapshot(ctx, "test_world")
+	if err != nil {
+		t.Fatalf("LoadSnapshot returned error: %v", err)
+	}
+	if current.Name != "Version B" {
+		t.Fatalf("current name = %q, want Version B", current.Name)
+	}
+}
+
+func TestFileStoreForkWorldFromCurrentState(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := NewFileStore(t.TempDir())
+	world := model.World{
+		ID:    "source_world",
+		Name:  "Original",
+		Clock: model.WorldClock{Sequence: 5},
+		Entities: map[model.EntityID]model.Entity{
+			"hero": {ID: "hero", Type: "character", Name: "Hero"},
+		},
+		EventLog: []model.WorldEvent{
+			{ID: "event_1", Type: model.EventTypeNote, Source: model.EventSourceTest},
+		},
+	}
+	if err := st.SaveSnapshot(ctx, world); err != nil {
+		t.Fatalf("SaveSnapshot returned error: %v", err)
+	}
+
+	forked, err := st.ForkWorld(ctx, "source_world", "branch_a", 0)
+	if err != nil {
+		t.Fatalf("ForkWorld returned error: %v", err)
+	}
+	if string(forked.ID) != "branch_a" {
+		t.Fatalf("forked ID = %q, want branch_a", forked.ID)
+	}
+	if forked.Name != "Original" {
+		t.Fatalf("forked name = %q, want Original", forked.Name)
+	}
+	if forked.Metadata.Fork == nil {
+		t.Fatal("forked world missing ForkInfo")
+	}
+	if string(forked.Metadata.Fork.ParentWorldID) != "source_world" {
+		t.Fatalf("parent = %q", forked.Metadata.Fork.ParentWorldID)
+	}
+	if forked.Metadata.Fork.ForkSequence != 5 {
+		t.Fatalf("fork sequence = %d, want 5", forked.Metadata.Fork.ForkSequence)
+	}
+	if len(forked.Entities) != 1 || forked.Entities["hero"].Name != "Hero" {
+		t.Fatalf("forked entities mismatch: %#v", forked.Entities)
+	}
+	if len(forked.EventLog) != 1 {
+		t.Fatalf("forked event log = %d events, want 1", len(forked.EventLog))
+	}
+
+	loaded, err := st.LoadSnapshot(ctx, "branch_a")
+	if err != nil {
+		t.Fatalf("LoadSnapshot branch_a returned error: %v", err)
+	}
+	if loaded.Metadata.Fork == nil || string(loaded.Metadata.Fork.ParentWorldID) != "source_world" {
+		t.Fatal("persisted fork info lost")
+	}
+}
+
+func TestFileStoreForkWorldFromCheckpoint(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := NewFileStore(t.TempDir())
+	world := model.World{
+		ID:    "source_world",
+		Name:  "At Checkpoint",
+		Clock: model.WorldClock{Sequence: 3},
+	}
+	if err := st.SaveSnapshot(ctx, world); err != nil {
+		t.Fatalf("SaveSnapshot returned error: %v", err)
+	}
+	if _, err := st.SaveCheckpoint(ctx, "source_world"); err != nil {
+		t.Fatalf("SaveCheckpoint returned error: %v", err)
+	}
+
+	world.Name = "Advanced"
+	world.Clock.Sequence = 10
+	if err := st.SaveSnapshot(ctx, world); err != nil {
+		t.Fatalf("SaveSnapshot returned error: %v", err)
+	}
+
+	forked, err := st.ForkWorld(ctx, "source_world", "branch_b", 3)
+	if err != nil {
+		t.Fatalf("ForkWorld returned error: %v", err)
+	}
+	if forked.Name != "At Checkpoint" {
+		t.Fatalf("forked name = %q, want 'At Checkpoint'", forked.Name)
+	}
+	if forked.Clock.Sequence != 3 {
+		t.Fatalf("forked clock = %d, want 3", forked.Clock.Sequence)
+	}
+	if forked.Metadata.Fork.ForkSequence != 3 {
+		t.Fatalf("fork sequence = %d, want 3", forked.Metadata.Fork.ForkSequence)
+	}
+
+	source, err := st.LoadSnapshot(ctx, "source_world")
+	if err != nil {
+		t.Fatalf("LoadSnapshot source returned error: %v", err)
+	}
+	if source.Name != "Advanced" {
+		t.Fatal("source world was modified by fork")
+	}
+}
+
+func TestFileStoreForkWorldRejectsSameID(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := NewFileStore(t.TempDir())
+	if err := st.SaveSnapshot(ctx, model.World{ID: "w", Name: "W"}); err != nil {
+		t.Fatalf("SaveSnapshot returned error: %v", err)
+	}
+	if _, err := st.ForkWorld(ctx, "w", "w", 0); err == nil {
+		t.Fatal("expected error when forking to same ID")
+	}
+}
+
+func TestFileStoreForkWorldClearsEventQueue(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := NewFileStore(t.TempDir())
+	world := model.World{
+		ID:   "source_world",
+		Name: "With Queue",
+		EventQueue: []model.EventQueueItem{{
+			Event: model.WorldEvent{ID: "queued_1", Type: model.EventTypeNote, Source: model.EventSourceRuntime},
+		}},
+	}
+	if err := st.SaveSnapshot(ctx, world); err != nil {
+		t.Fatalf("SaveSnapshot returned error: %v", err)
+	}
+
+	forked, err := st.ForkWorld(ctx, "source_world", "branch_c", 0)
+	if err != nil {
+		t.Fatalf("ForkWorld returned error: %v", err)
+	}
+	if len(forked.EventQueue) != 0 {
+		t.Fatalf("forked world should have empty event queue, got %d", len(forked.EventQueue))
+	}
+}
+
 func TestFileStoreLoadSnapshotRejectsInvalidMemoriesAndThreads(t *testing.T) {
 	t.Parallel()
 

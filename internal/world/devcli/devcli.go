@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 
 	bridgenarrative "github.com/sizolity/nobody/internal/bridge/narrative"
 	"github.com/sizolity/nobody/internal/world/director"
@@ -20,7 +21,7 @@ import (
 
 func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: nobody-world <init|apply-event|step-script|step-reconcile|step-config|step-llm|run|bridge-context|debug-view|narrative-view|show>")
+		fmt.Fprintln(stderr, "usage: nobody-world <init|apply-event|step-script|step-reconcile|step-config|step-llm|run|checkpoint|rollback|list-checkpoints|fork|bridge-context|debug-view|narrative-view|show>")
 		return 2
 	}
 	switch args[0] {
@@ -38,6 +39,14 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runStepLLM(ctx, args[1:], stdout, stderr)
 	case "run":
 		return runRun(ctx, args[1:], stdout, stderr)
+	case "checkpoint":
+		return runCheckpoint(ctx, args[1:], stdout, stderr)
+	case "rollback":
+		return runRollback(ctx, args[1:], stdout, stderr)
+	case "list-checkpoints":
+		return runListCheckpoints(ctx, args[1:], stdout, stderr)
+	case "fork":
+		return runFork(ctx, args[1:], stdout, stderr)
 	case "bridge-context":
 		return runBridgeContext(ctx, args[1:], stdout, stderr)
 	case "debug-view":
@@ -272,6 +281,108 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+func runCheckpoint(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	fs := newFlagSet("checkpoint", stderr)
+	workspace := fs.String("workspace", "", "workspace directory")
+	worldID := fs.String("world-id", "", "world id")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *workspace == "" || *worldID == "" {
+		fmt.Fprintln(stderr, "checkpoint requires --workspace and --world-id")
+		return 2
+	}
+	r := runner.New(store.NewFileStore(*workspace))
+	result, err := r.Checkpoint(ctx, *worldID)
+	if err != nil {
+		fmt.Fprintf(stderr, "checkpoint failed: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "checkpoint saved for world %s at sequence %d\n", result.WorldID, result.Sequence)
+	return 0
+}
+
+func runRollback(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	fs := newFlagSet("rollback", stderr)
+	workspace := fs.String("workspace", "", "workspace directory")
+	worldID := fs.String("world-id", "", "world id")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *workspace == "" || *worldID == "" {
+		fmt.Fprintln(stderr, "rollback requires --workspace, --world-id, and a sequence number as positional arg")
+		return 2
+	}
+	remaining := fs.Args()
+	if len(remaining) != 1 {
+		fmt.Fprintln(stderr, "rollback requires exactly one positional arg: the target sequence number")
+		return 2
+	}
+	seq, err := strconv.ParseInt(remaining[0], 10, 64)
+	if err != nil {
+		fmt.Fprintf(stderr, "invalid sequence number %q: %v\n", remaining[0], err)
+		return 2
+	}
+	r := runner.New(store.NewFileStore(*workspace))
+	result, err := r.Rollback(ctx, *worldID, seq)
+	if err != nil {
+		fmt.Fprintf(stderr, "rollback failed: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "rolled back world %s to sequence %d\n", result.World.ID, result.RestoredSequence)
+	return 0
+}
+
+func runListCheckpoints(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	fs := newFlagSet("list-checkpoints", stderr)
+	workspace := fs.String("workspace", "", "workspace directory")
+	worldID := fs.String("world-id", "", "world id")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *workspace == "" || *worldID == "" {
+		fmt.Fprintln(stderr, "list-checkpoints requires --workspace and --world-id")
+		return 2
+	}
+	r := runner.New(store.NewFileStore(*workspace))
+	seqs, err := r.ListCheckpoints(ctx, *worldID)
+	if err != nil {
+		fmt.Fprintf(stderr, "list-checkpoints failed: %v\n", err)
+		return 1
+	}
+	if len(seqs) == 0 {
+		fmt.Fprintln(stdout, "no checkpoints")
+		return 0
+	}
+	for _, seq := range seqs {
+		fmt.Fprintf(stdout, "checkpoint at sequence %d\n", seq)
+	}
+	return 0
+}
+
+func runFork(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	fs := newFlagSet("fork", stderr)
+	workspace := fs.String("workspace", "", "workspace directory")
+	worldID := fs.String("world-id", "", "source world id")
+	newID := fs.String("new-id", "", "new world id for the fork")
+	atSeq := fs.Int64("at-sequence", 0, "fork from checkpoint at this sequence (0 = current state)")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *workspace == "" || *worldID == "" || *newID == "" {
+		fmt.Fprintln(stderr, "fork requires --workspace, --world-id, and --new-id")
+		return 2
+	}
+	r := runner.New(store.NewFileStore(*workspace))
+	result, err := r.Fork(ctx, *worldID, *newID, *atSeq)
+	if err != nil {
+		fmt.Fprintf(stderr, "fork failed: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "forked world %s from %s at sequence %d\n", result.World.ID, *worldID, result.ForkSequence)
+	return 0
+}
+
 func runBridgeContext(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := newFlagSet("bridge-context", stderr)
 	workspace := fs.String("workspace", "", "workspace directory")
@@ -393,17 +504,22 @@ func readJSONFile(path string, out any) error {
 }
 
 func cliGeneratorFactory(provider, modelName string) (director.TextGenerator, error) {
+	if provider == "" {
+		provider = "deepseek"
+	}
+	envKey := providerEnvKey(provider)
+	apiKey := os.Getenv(envKey)
+	if apiKey == "" && envKey != "" {
+		return nil, fmt.Errorf("%s environment variable is required for %s provider", envKey, provider)
+	}
+	return director.NewProviderGenerator(context.Background(), provider, modelName, apiKey)
+}
+
+func providerEnvKey(provider string) string {
 	switch provider {
-	case "deepseek", "":
-		apiKey := os.Getenv("DEEPSEEK_API_KEY")
-		if apiKey == "" {
-			return nil, fmt.Errorf("DEEPSEEK_API_KEY environment variable is required for deepseek provider")
-		}
-		return director.NewDeepSeekGenerator(director.DeepSeekGeneratorConfig{
-			APIKey: apiKey,
-			Model:  modelName,
-		}), nil
+	case "deepseek":
+		return "DEEPSEEK_API_KEY"
 	default:
-		return nil, fmt.Errorf("unsupported LLM provider %q", provider)
+		return ""
 	}
 }

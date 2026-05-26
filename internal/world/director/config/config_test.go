@@ -418,10 +418,174 @@ func TestDirectorConfigLLMJSONRoundTrip(t *testing.T) {
 	}
 }
 
+func TestLoadDirectorsLLMWithPromptTemplate(t *testing.T) {
+	t.Parallel()
+
+	const data = `{
+  "directors": [
+    {
+      "id": "llm_tpl",
+      "kind": "llm",
+      "system_prompt_template": "You direct {{.Name}}."
+    }
+  ]
+}`
+
+	gen := &capturingStubGenerator{response: "[]"}
+	factory := func(provider, model string) (director.TextGenerator, error) {
+		return gen, nil
+	}
+
+	directors, err := LoadDirectors([]byte(data), LoadOptions{GeneratorFactory: factory})
+	if err != nil {
+		t.Fatalf("LoadDirectors error: %v", err)
+	}
+
+	_, err = directors[0].Propose(director.Context{
+		Ctx:   context.Background(),
+		World: model.World{ID: "w", Name: "Darklands"},
+	})
+	if err != nil {
+		t.Fatalf("Propose error: %v", err)
+	}
+	if gen.lastSystem != "You direct Darklands." {
+		t.Fatalf("system prompt = %q", gen.lastSystem)
+	}
+}
+
+func TestLoadDirectorsLLMRejectsInvalidTemplate(t *testing.T) {
+	t.Parallel()
+
+	const data = `{
+  "directors": [
+    {
+      "id": "llm_bad_tpl",
+      "kind": "llm",
+      "system_prompt_template": "{{.Broken"
+    }
+  ]
+}`
+
+	factory := func(provider, model string) (director.TextGenerator, error) {
+		return &stubGenerator{response: "[]"}, nil
+	}
+
+	_, err := LoadDirectors([]byte(data), LoadOptions{GeneratorFactory: factory})
+	if err == nil {
+		t.Fatal("expected error for invalid template syntax")
+	}
+}
+
+func TestLoadDirectorsLLMTemplateTakesPriorityOverStatic(t *testing.T) {
+	t.Parallel()
+
+	const data = `{
+  "directors": [
+    {
+      "id": "llm_both",
+      "kind": "llm",
+      "system_prompt": "this should be ignored",
+      "system_prompt_template": "Dynamic: {{.Name}}"
+    }
+  ]
+}`
+
+	gen := &capturingStubGenerator{response: "[]"}
+	factory := func(provider, model string) (director.TextGenerator, error) {
+		return gen, nil
+	}
+
+	directors, err := LoadDirectors([]byte(data), LoadOptions{GeneratorFactory: factory})
+	if err != nil {
+		t.Fatalf("LoadDirectors error: %v", err)
+	}
+
+	_, err = directors[0].Propose(director.Context{
+		Ctx:   context.Background(),
+		World: model.World{ID: "w", Name: "TestWorld"},
+	})
+	if err != nil {
+		t.Fatalf("Propose error: %v", err)
+	}
+	if gen.lastSystem != "Dynamic: TestWorld" {
+		t.Fatalf("expected template prompt, got %q", gen.lastSystem)
+	}
+}
+
+func TestLoadDirectorsLLMFStringFormat(t *testing.T) {
+	t.Parallel()
+
+	const data = `{
+  "directors": [
+    {
+      "id": "llm_fstring",
+      "kind": "llm",
+      "system_prompt_template": "You direct {Name}.",
+      "template_format": "fstring"
+    }
+  ]
+}`
+
+	gen := &capturingStubGenerator{response: "[]"}
+	factory := func(provider, model string) (director.TextGenerator, error) {
+		return gen, nil
+	}
+
+	directors, err := LoadDirectors([]byte(data), LoadOptions{GeneratorFactory: factory})
+	if err != nil {
+		t.Fatalf("LoadDirectors error: %v", err)
+	}
+
+	_, err = directors[0].Propose(director.Context{
+		Ctx:   context.Background(),
+		World: model.World{ID: "w", Name: "Darklands"},
+	})
+	if err != nil {
+		t.Fatalf("Propose error: %v", err)
+	}
+	if gen.lastSystem != "You direct Darklands." {
+		t.Fatalf("system prompt = %q, want 'You direct Darklands.'", gen.lastSystem)
+	}
+}
+
+func TestLoadDirectorsLLMRejectsUnsupportedFormat(t *testing.T) {
+	t.Parallel()
+
+	const data = `{
+  "directors": [
+    {
+      "id": "llm_bad_fmt",
+      "kind": "llm",
+      "system_prompt_template": "hello",
+      "template_format": "unknown_fmt"
+    }
+  ]
+}`
+
+	factory := func(provider, model string) (director.TextGenerator, error) {
+		return &stubGenerator{response: "[]"}, nil
+	}
+
+	_, err := LoadDirectors([]byte(data), LoadOptions{GeneratorFactory: factory})
+	if err == nil {
+		t.Fatal("expected error for unsupported template_format")
+	}
+}
+
 type stubGenerator struct {
 	response string
 }
 
 func (g *stubGenerator) Generate(_ context.Context, _, _ string) (string, error) {
+	return g.response, nil
+}
+
+type capturingStubGenerator struct {
+	response   string
+	lastSystem string
+}
+
+func (g *capturingStubGenerator) Generate(_ context.Context, system, _ string) (string, error) {
+	g.lastSystem = system
 	return g.response, nil
 }
