@@ -523,6 +523,7 @@ func runBeat(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	modelName := fs.String("model", "", "model name (default per provider)")
 	userInput := fs.String("input", "", "optional user input / prompt to steer the beat")
 	recentEvents := fs.Int("recent-events", 20, "max recent world events included in context")
+	apply := fs.Bool("apply", false, "persist beat results back to world state")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -531,7 +532,8 @@ func runBeat(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	world, err := store.NewFileStore(*workspace).LoadSnapshot(ctx, *worldID)
+	fs2 := store.NewFileStore(*workspace)
+	world, err := fs2.LoadSnapshot(ctx, *worldID)
 	if err != nil {
 		fmt.Fprintf(stderr, "load world: %v\n", err)
 		return 1
@@ -548,10 +550,18 @@ func runBeat(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	return executeBeatPipeline(ctx, gen, world, bundle, stdout, stderr)
+	var applyStore beatApplyStore
+	if *apply {
+		applyStore = fs2
+	}
+	return executeBeatPipeline(ctx, gen, world, bundle, applyStore, stdout, stderr)
 }
 
-func executeBeatPipeline(ctx context.Context, gen engine.TextGenerator, world model.World, bundle engine.ContextBundle, stdout, stderr io.Writer) int {
+type beatApplyStore interface {
+	SaveSnapshot(ctx context.Context, world model.World) error
+}
+
+func executeBeatPipeline(ctx context.Context, gen engine.TextGenerator, world model.World, bundle engine.ContextBundle, applyStore beatApplyStore, stdout, stderr io.Writer) int {
 	directorAgent := engine.NewLLMDirectorAgent(gen)
 	writerAgent := engine.NewLLMWriterAgent(gen)
 	continuityAgent := engine.NewLLMContinuityAgent(gen)
@@ -596,6 +606,18 @@ func executeBeatPipeline(ctx context.Context, gen engine.TextGenerator, world mo
 		return 1
 	}
 	fmt.Fprintf(stderr, "graph: %d node(s), current=%s\n", len(stateDelta.Graph.Nodes), stateDelta.Graph.CurrentNodeID)
+
+	if applyStore != nil {
+		updated := bridgenarrative.ApplyBeatResult(world, bridgenarrative.BeatResult{
+			Plan: plan, Draft: draft, Report: report,
+			MemDelta: memDelta, StateDelta: stateDelta,
+		})
+		if err := applyStore.SaveSnapshot(ctx, updated); err != nil {
+			fmt.Fprintf(stderr, "apply failed: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(stderr, "applied: world %s updated (sequence %d)\n", updated.ID, updated.Clock.Sequence)
+	}
 
 	events := make([]beatOutputEvent, 0, len(memDelta.Events))
 	for _, ev := range memDelta.Events {

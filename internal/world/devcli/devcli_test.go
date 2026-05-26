@@ -1072,7 +1072,7 @@ func TestExecuteBeatPipelineProducesJSON(t *testing.T) {
 	}}
 
 	var stdout, stderr bytes.Buffer
-	code := executeBeatPipeline(context.Background(), gen, world, bundle, &stdout, &stderr)
+	code := executeBeatPipeline(context.Background(), gen, world, bundle, nil, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("executeBeatPipeline exit %d, stderr=%s", code, stderr.String())
 	}
@@ -1135,12 +1135,66 @@ func TestExecuteBeatPipelineDirectorError(t *testing.T) {
 	gen := &beatFakeGenerator{responses: []string{`not json`}}
 
 	var stdout, stderr bytes.Buffer
-	code := executeBeatPipeline(context.Background(), gen, world, bundle, &stdout, &stderr)
+	code := executeBeatPipeline(context.Background(), gen, world, bundle, nil, &stdout, &stderr)
 	if code != 1 {
 		t.Fatalf("expected exit 1, got %d", code)
 	}
 	if !bytes.Contains(stderr.Bytes(), []byte("director plan")) {
 		t.Errorf("stderr should mention director plan failure: %s", stderr.String())
+	}
+}
+
+func TestExecuteBeatPipelineApplyPersistsToWorld(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	ctx := context.Background()
+	st := store.NewFileStore(workspace)
+
+	world := model.World{
+		ID: "w", Name: "W",
+		Threads: []model.WorldThread{
+			{ID: "t1", Kind: model.ThreadKindQuest, Title: "Find artifact", Status: model.ThreadStatusActive},
+		},
+	}
+	if err := st.SaveSnapshot(ctx, world); err != nil {
+		t.Fatalf("SaveSnapshot: %v", err)
+	}
+
+	bundle := bridgenarrative.AdaptWorld(world, bridgenarrative.Options{RecentEvents: 10})
+	gen := &beatFakeGenerator{responses: []string{
+		`{"beat_id":"beat_apply","objective":"Test apply","target_node_id":"t1"}`,
+		`{"id":"draft_1","beat_id":"beat_apply","title":"Applied Scene","kind":"scene","text":"Something happened."}`,
+		`{"issues":[]}`,
+		`{"events":[{"id":"ev_a","beat_id":"beat_apply","type":"scene","summary":"Scene played out."}],"memories":[{"id":"mem_a","type":"observation","subject":"world","text":"A change.","importance":5}]}`,
+		`{"graph":{"current_node_id":"t1","nodes":[{"id":"t1","type":"quest","status":"completed","goal":"Find artifact"}]}}`,
+	}}
+
+	var stdout, stderr bytes.Buffer
+	code := executeBeatPipeline(ctx, gen, world, bundle, st, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit %d, stderr=%s", code, stderr.String())
+	}
+
+	if !bytes.Contains(stderr.Bytes(), []byte("applied:")) {
+		t.Error("stderr missing 'applied:' message")
+	}
+
+	updated, err := st.LoadSnapshot(ctx, "w")
+	if err != nil {
+		t.Fatalf("LoadSnapshot: %v", err)
+	}
+	if updated.Clock.Sequence != 1 {
+		t.Errorf("sequence = %d, want 1", updated.Clock.Sequence)
+	}
+	if len(updated.EventLog) < 2 {
+		t.Fatalf("events = %d, want >= 2", len(updated.EventLog))
+	}
+	if len(updated.Memory) != 1 {
+		t.Fatalf("memories = %d, want 1", len(updated.Memory))
+	}
+	if updated.Threads[0].Status != model.ThreadStatusResolved {
+		t.Errorf("thread status = %q, want resolved", updated.Threads[0].Status)
 	}
 }
 
