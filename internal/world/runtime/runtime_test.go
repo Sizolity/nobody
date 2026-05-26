@@ -623,6 +623,132 @@ func TestRuntimeRejectsUpdateMissingThread(t *testing.T) {
 	}
 }
 
+func TestRuntimeAppliesAddEntityEffect(t *testing.T) {
+	t.Parallel()
+
+	rt := Runtime{}
+	world := model.World{ID: "test_world", Name: "Test World"}
+	event := model.WorldEvent{
+		ID:     "event_1",
+		Type:   model.EventTypeNote,
+		Source: model.EventSourceRuntime,
+		Effects: []model.Effect{{
+			Kind:     model.EffectAddEntity,
+			TargetID: "npc_merchant",
+			Payload: map[string]model.Value{
+				"type":        {Kind: model.ValueKindString, Raw: "character"},
+				"name":        {Kind: model.ValueKindString, Raw: "Traveling Merchant"},
+				"description": {Kind: model.ValueKindString, Raw: "A wandering trader."},
+			},
+		}},
+	}
+
+	got, err := rt.ApplyEvent(world, event)
+	if err != nil {
+		t.Fatalf("ApplyEvent returned error: %v", err)
+	}
+	entity, ok := got.Entities["npc_merchant"]
+	if !ok {
+		t.Fatalf("entity npc_merchant not found: %#v", got.Entities)
+	}
+	if entity.Name != "Traveling Merchant" || entity.Type != "character" {
+		t.Fatalf("entity mismatch: %#v", entity)
+	}
+	if entity.Description != "A wandering trader." {
+		t.Fatalf("description = %q", entity.Description)
+	}
+	if world.Entities != nil {
+		t.Fatalf("input world was mutated: %#v", world.Entities)
+	}
+}
+
+func TestRuntimeRejectsAddEntityWithDuplicateID(t *testing.T) {
+	t.Parallel()
+
+	rt := Runtime{}
+	world := model.World{
+		ID:   "test_world",
+		Name: "Test World",
+		Entities: map[model.EntityID]model.Entity{
+			"char_1": {ID: "char_1", Type: "character", Name: "Alice"},
+		},
+	}
+	event := model.WorldEvent{
+		ID:     "event_1",
+		Type:   model.EventTypeNote,
+		Source: model.EventSourceRuntime,
+		Effects: []model.Effect{{
+			Kind:     model.EffectAddEntity,
+			TargetID: "char_1",
+			Payload: map[string]model.Value{
+				"type": {Kind: model.ValueKindString, Raw: "character"},
+				"name": {Kind: model.ValueKindString, Raw: "Duplicate"},
+			},
+		}},
+	}
+
+	if _, err := rt.ApplyEvent(world, event); err == nil {
+		t.Fatal("ApplyEvent returned nil for duplicate entity ID")
+	}
+}
+
+func TestRuntimeAppliesRemoveEntityEffect(t *testing.T) {
+	t.Parallel()
+
+	rt := Runtime{}
+	world := model.World{
+		ID:   "test_world",
+		Name: "Test World",
+		Entities: map[model.EntityID]model.Entity{
+			"char_1": {ID: "char_1", Type: "character", Name: "Alice"},
+			"char_2": {ID: "char_2", Type: "character", Name: "Bob"},
+		},
+	}
+	event := model.WorldEvent{
+		ID:     "event_1",
+		Type:   model.EventTypeNote,
+		Source: model.EventSourceRuntime,
+		Effects: []model.Effect{{
+			Kind:     model.EffectRemoveEntity,
+			TargetID: "char_1",
+		}},
+	}
+
+	got, err := rt.ApplyEvent(world, event)
+	if err != nil {
+		t.Fatalf("ApplyEvent returned error: %v", err)
+	}
+	if _, ok := got.Entities["char_1"]; ok {
+		t.Fatal("char_1 should have been removed")
+	}
+	if _, ok := got.Entities["char_2"]; !ok {
+		t.Fatal("char_2 should still exist")
+	}
+	if len(world.Entities) != 2 {
+		t.Fatalf("input world was mutated: %d entities", len(world.Entities))
+	}
+}
+
+func TestRuntimeRejectsRemoveEntityMissingID(t *testing.T) {
+	t.Parallel()
+
+	rt := Runtime{}
+	world := model.World{ID: "test_world", Name: "Test World"}
+	event := model.WorldEvent{
+		ID:     "event_1",
+		Type:   model.EventTypeNote,
+		Source: model.EventSourceRuntime,
+		Effects: []model.Effect{{
+			Kind:     model.EffectRemoveEntity,
+			TargetID: "nonexistent",
+		}},
+	}
+
+	if _, err := rt.ApplyEvent(world, event); err == nil {
+		t.Fatal("ApplyEvent returned nil for removing nonexistent entity")
+	}
+}
+
 type testRule struct {
 	id       model.RuleID
 	decision RuleDecision

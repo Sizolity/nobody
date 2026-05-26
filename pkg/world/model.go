@@ -124,6 +124,8 @@ const (
 	EffectOpenThread         = internal.EffectOpenThread
 	EffectUpdateThread       = internal.EffectUpdateThread
 	EffectCloseThread        = internal.EffectCloseThread
+	EffectAddEntity          = internal.EffectAddEntity
+	EffectRemoveEntity       = internal.EffectRemoveEntity
 )
 
 // Memory owner kind constants.

@@ -69,6 +69,8 @@ const (
 	EffectOpenThread         = "open_thread"
 	EffectUpdateThread       = "update_thread"
 	EffectCloseThread        = "close_thread"
+	EffectAddEntity          = "add_entity"
+	EffectRemoveEntity       = "remove_entity"
 )
 
 func (e Effect) Validate() error {
@@ -76,7 +78,7 @@ func (e Effect) Validate() error {
 		return fmt.Errorf("effect.kind is required")
 	}
 	switch e.Kind {
-	case EffectSetFact, EffectUpdateEntityState, EffectSetEntityComponent, EffectAddRelation, EffectAddMemory, EffectReviseMemory, EffectReconcileMemory, EffectEnqueueEvent, EffectOpenThread, EffectUpdateThread, EffectCloseThread:
+	case EffectSetFact, EffectUpdateEntityState, EffectSetEntityComponent, EffectAddRelation, EffectAddMemory, EffectReviseMemory, EffectReconcileMemory, EffectEnqueueEvent, EffectOpenThread, EffectUpdateThread, EffectCloseThread, EffectAddEntity, EffectRemoveEntity:
 	default:
 		return fmt.Errorf("unsupported effect kind %q", e.Kind)
 	}

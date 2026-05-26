@@ -360,6 +360,10 @@ func applyEffect(world model.World, effect model.Effect) (model.World, error) {
 		return applyUpdateThread(world, effect)
 	case model.EffectCloseThread:
 		return applyCloseThread(world, effect)
+	case model.EffectAddEntity:
+		return applyAddEntity(world, effect)
+	case model.EffectRemoveEntity:
+		return applyRemoveEntity(world, effect)
 	default:
 		return model.World{}, fmt.Errorf("unsupported effect kind %q", effect.Kind)
 	}
@@ -704,6 +708,46 @@ func updateThreadFromPayload(thread model.WorldThread, effect model.Effect) mode
 		thread.Tension = payloadOptionalFloat(effect, "tension")
 	}
 	return thread
+}
+
+func applyAddEntity(world model.World, effect model.Effect) (model.World, error) {
+	entityID := model.EntityID(effect.TargetID)
+	if world.Entities != nil {
+		if _, ok := world.Entities[entityID]; ok {
+			return model.World{}, fmt.Errorf("entity %q already exists", effect.TargetID)
+		}
+	}
+	entityType, err := payloadString(effect, "type")
+	if err != nil {
+		return model.World{}, err
+	}
+	name, err := payloadString(effect, "name")
+	if err != nil {
+		return model.World{}, err
+	}
+	entity := model.Entity{
+		ID:          entityID,
+		Type:        entityType,
+		Name:        name,
+		Description: payloadOptionalString(effect, "description"),
+	}
+	if err := entity.Validate(); err != nil {
+		return model.World{}, err
+	}
+	if world.Entities == nil {
+		world.Entities = map[model.EntityID]model.Entity{}
+	}
+	world.Entities[entityID] = entity
+	return world, nil
+}
+
+func applyRemoveEntity(world model.World, effect model.Effect) (model.World, error) {
+	entityID := model.EntityID(effect.TargetID)
+	if _, ok := world.Entities[entityID]; !ok {
+		return model.World{}, fmt.Errorf("entity %q not found", effect.TargetID)
+	}
+	delete(world.Entities, entityID)
+	return world, nil
 }
 
 func payloadString(effect model.Effect, key string) (string, error) {
