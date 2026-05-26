@@ -194,6 +194,82 @@ func TestRunnerStepDoesNotSaveWhenStepFails(t *testing.T) {
 	}
 }
 
+func TestRunnerRunExecutesMultipleStepsAndSaves(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := store.NewFileStore(t.TempDir())
+	initial := model.World{
+		ID:    "test_world",
+		Name:  "Test World",
+		Clock: model.WorldClock{Sequence: 0},
+	}
+	if err := st.SaveSnapshot(ctx, initial); err != nil {
+		t.Fatalf("SaveSnapshot returned error: %v", err)
+	}
+	r := New(
+		st,
+		worldruntime.WithoutRules(),
+		worldruntime.WithDirectors(director.NewScriptDirector("script_1", []model.WorldEvent{{
+			ID:     "event_1",
+			Type:   model.EventTypeNote,
+			Source: model.EventSourceDirector,
+		}})),
+	)
+
+	got, err := r.Run(ctx, "test_world", 3)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if got.StepsCompleted != 3 {
+		t.Fatalf("StepsCompleted = %d, want 3", got.StepsCompleted)
+	}
+	if got.World.Clock.Sequence != 3 {
+		t.Fatalf("Clock.Sequence = %d, want 3", got.World.Clock.Sequence)
+	}
+
+	saved, err := st.LoadSnapshot(ctx, "test_world")
+	if err != nil {
+		t.Fatalf("LoadSnapshot returned error: %v", err)
+	}
+	if saved.Clock.Sequence != 3 {
+		t.Fatalf("persisted Clock.Sequence = %d, want 3", saved.Clock.Sequence)
+	}
+	if len(saved.EventLog) != 3 {
+		t.Fatalf("persisted EventLog length = %d, want 3", len(saved.EventLog))
+	}
+}
+
+func TestRunnerRunDoesNotSaveOnFirstStepFailure(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	st := store.NewFileStore(t.TempDir())
+	initial := model.World{ID: "test_world", Name: "Test World"}
+	if err := st.SaveSnapshot(ctx, initial); err != nil {
+		t.Fatalf("SaveSnapshot returned error: %v", err)
+	}
+	r := New(
+		st,
+		worldruntime.WithoutRules(),
+		worldruntime.WithDirectors(director.NewScriptDirector("script_1", []model.WorldEvent{
+			{ID: "event_1"},
+		})),
+	)
+
+	if _, err := r.Run(ctx, "test_world", 5); err == nil {
+		t.Fatal("Run returned nil error for invalid proposal")
+	}
+
+	saved, err := st.LoadSnapshot(ctx, "test_world")
+	if err != nil {
+		t.Fatalf("LoadSnapshot returned error: %v", err)
+	}
+	if len(saved.EventLog) != 0 {
+		t.Fatalf("failed run was persisted: %#v", saved.EventLog)
+	}
+}
+
 func TestRunnerStepConsumesQueueAndSavesRemainingQueue(t *testing.T) {
 	t.Parallel()
 

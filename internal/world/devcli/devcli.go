@@ -19,7 +19,7 @@ import (
 
 func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: nobody-world <init|apply-event|step-script|step-reconcile|step-config|debug-view|narrative-view|show>")
+		fmt.Fprintln(stderr, "usage: nobody-world <init|apply-event|step-script|step-reconcile|step-config|run|debug-view|narrative-view|show>")
 		return 2
 	}
 	switch args[0] {
@@ -33,6 +33,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runStepReconcile(ctx, args[1:], stdout, stderr)
 	case "step-config":
 		return runStepConfig(ctx, args[1:], stdout, stderr)
+	case "run":
+		return runRun(ctx, args[1:], stdout, stderr)
 	case "debug-view":
 		return runDebugView(ctx, args[1:], stdout, stderr)
 	case "narrative-view":
@@ -185,6 +187,43 @@ func runStepConfig(ctx context.Context, args []string, stdout, stderr io.Writer)
 		return 1
 	}
 	fmt.Fprintf(stdout, "applied %d configured events to world %s\n", len(result.AppliedEvents), result.World.ID)
+	return 0
+}
+
+func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	fs := newFlagSet("run", stderr)
+	workspace := fs.String("workspace", "", "workspace directory")
+	worldID := fs.String("world-id", "", "world id")
+	configFile := fs.String("config-file", "", "director config JSON file")
+	steps := fs.Int("steps", 1, "number of steps to execute")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *workspace == "" || *worldID == "" || *configFile == "" {
+		fmt.Fprintln(stderr, "run requires --workspace, --world-id, and --config-file")
+		return 2
+	}
+	data, err := os.ReadFile(*configFile)
+	if err != nil {
+		fmt.Fprintf(stderr, "read director config failed: %v\n", err)
+		return 1
+	}
+	directors, err := directorconfig.LoadDirectors(data)
+	if err != nil {
+		fmt.Fprintf(stderr, "load director config failed: %v\n", err)
+		return 1
+	}
+	r := runner.New(
+		store.NewFileStore(*workspace),
+		worldruntime.WithDirectors(directors...),
+	)
+	result, err := r.Run(ctx, *worldID, *steps)
+	if err != nil {
+		fmt.Fprintf(stderr, "run failed: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "ran %d steps on world %s (%d events applied)\n",
+		result.StepsCompleted, result.World.ID, len(result.AllAppliedEvents))
 	return 0
 }
 

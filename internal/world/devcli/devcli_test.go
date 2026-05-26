@@ -586,6 +586,53 @@ func TestRunStepConfigPersistsConfiguredDirectors(t *testing.T) {
 	}
 }
 
+func TestRunRunPersistsMultipleConfiguredSteps(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	ctx := context.Background()
+	st := store.NewFileStore(workspace)
+	if err := st.SaveSnapshot(ctx, model.World{
+		ID:   "test_world",
+		Name: "Test World",
+		Clock: model.WorldClock{
+			Current:  model.WorldTime{Kind: model.WorldTimeTick, Tick: 0},
+			Sequence: 0,
+		},
+	}); err != nil {
+		t.Fatalf("SaveSnapshot returned error: %v", err)
+	}
+
+	configPath := filepath.Join(workspace, "directors.json")
+	writeTestJSON(t, configPath, json.RawMessage(`{"directors":[{"kind":"script","id":"s1","events":[{"id":"event_s","type":"note","source":"director"}]}]}`))
+
+	var stdout, stderr bytes.Buffer
+	code := Run(ctx, []string{
+		"run",
+		"--workspace", workspace,
+		"--world-id", "test_world",
+		"--config-file", configPath,
+		"--steps", "3",
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("Run exit code = %d, stderr=%s", code, stderr.String())
+	}
+
+	world, err := st.LoadSnapshot(ctx, "test_world")
+	if err != nil {
+		t.Fatalf("LoadSnapshot returned error: %v", err)
+	}
+	if world.Clock.Sequence != 3 {
+		t.Fatalf("Clock.Sequence = %d, want 3", world.Clock.Sequence)
+	}
+	if len(world.EventLog) != 3 {
+		t.Fatalf("EventLog length = %d, want 3", len(world.EventLog))
+	}
+	if want := "ran 3 steps on world test_world (3 events applied)\n"; stdout.String() != want {
+		t.Fatalf("stdout = %q, want %q", stdout.String(), want)
+	}
+}
+
 func writeTestJSON(t *testing.T, path string, v any) {
 	t.Helper()
 	data, err := json.Marshal(v)
