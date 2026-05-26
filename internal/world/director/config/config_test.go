@@ -74,6 +74,44 @@ func TestLoadDirectorsBuildsScriptAndReconcileDirectors(t *testing.T) {
 	}
 }
 
+func TestLoadDirectorsBuildsEventTableDirector(t *testing.T) {
+	t.Parallel()
+
+	const data = `{
+  "directors": [
+    {
+      "id": "table_1",
+      "kind": "event_table",
+      "entries": [
+        {
+          "weight": 1,
+          "event": {"id": "event_1", "type": "note", "source": "director"}
+        },
+        {
+          "weight": 3,
+          "event": {"id": "event_2", "type": "note", "source": "director"}
+        }
+      ]
+    }
+  ]
+}`
+
+	directors, err := LoadDirectors([]byte(data))
+	if err != nil {
+		t.Fatalf("LoadDirectors returned error: %v", err)
+	}
+	if len(directors) != 1 || directors[0].ID() != "table_1" {
+		t.Fatalf("directors mismatch: %#v", directors)
+	}
+	got, err := directors[0].Propose(director.Context{World: model.World{Clock: model.WorldClock{Sequence: 1}}})
+	if err != nil {
+		t.Fatalf("Propose returned error: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "event_2" {
+		t.Fatalf("event table proposal mismatch: %#v", got)
+	}
+}
+
 func TestLoadDirectorsRejectsUnsupportedKind(t *testing.T) {
 	t.Parallel()
 
@@ -106,6 +144,14 @@ func TestLoadDirectorsRejectsInvalidDirectorConfig(t *testing.T) {
 			name: "invalid reconcile case",
 			data: `{"directors":[{"id":"reconcile_1","kind":"reconcile","cases":[{"target_memory_id":"memory_1"}]}]}`,
 		},
+		{
+			name: "invalid event table event",
+			data: `{"directors":[{"id":"table_1","kind":"event_table","entries":[{"weight":1,"event":{"id":"event_1"}}]}]}`,
+		},
+		{
+			name: "invalid event table weight",
+			data: `{"directors":[{"id":"table_1","kind":"event_table","entries":[{"weight":0,"event":{"id":"event_1","type":"note","source":"director"}}]}]}`,
+		},
 	}
 
 	for _, tc := range cases {
@@ -129,6 +175,17 @@ func TestDirectorConfigJSONRoundTrip(t *testing.T) {
 				Type:   model.EventTypeNote,
 				Source: model.EventSourceDirector,
 			}},
+		}, {
+			ID:   "table_1",
+			Kind: DirectorKindEventTable,
+			Entries: []director.EventTableEntry{{
+				Weight: 1,
+				Event: model.WorldEvent{
+					ID:     "event_2",
+					Type:   model.EventTypeNote,
+					Source: model.EventSourceDirector,
+				},
+			}},
 		}},
 	}
 	data, err := json.Marshal(cfg)
@@ -139,7 +196,7 @@ func TestDirectorConfigJSONRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatalf("Unmarshal returned error: %v", err)
 	}
-	if len(got.Directors) != 1 || got.Directors[0].Kind != DirectorKindScript {
+	if len(got.Directors) != 2 || got.Directors[0].Kind != DirectorKindScript || got.Directors[1].Kind != DirectorKindEventTable {
 		t.Fatalf("config mismatch: %#v", got)
 	}
 }

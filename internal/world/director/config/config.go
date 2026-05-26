@@ -10,8 +10,9 @@ import (
 )
 
 const (
-	DirectorKindScript    = "script"
-	DirectorKindReconcile = "reconcile"
+	DirectorKindScript     = "script"
+	DirectorKindReconcile  = "reconcile"
+	DirectorKindEventTable = "event_table"
 )
 
 type File struct {
@@ -19,10 +20,11 @@ type File struct {
 }
 
 type DirectorConfig struct {
-	ID     string                   `json:"id"`
-	Kind   string                   `json:"kind"`
-	Events []model.WorldEvent       `json:"events,omitempty"`
-	Cases  []director.ReconcileCase `json:"cases,omitempty"`
+	ID      string                     `json:"id"`
+	Kind    string                     `json:"kind"`
+	Events  []model.WorldEvent         `json:"events,omitempty"`
+	Cases   []director.ReconcileCase   `json:"cases,omitempty"`
+	Entries []director.EventTableEntry `json:"entries,omitempty"`
 }
 
 func LoadDirectors(data []byte) ([]director.Director, error) {
@@ -59,6 +61,11 @@ func buildDirector(cfg DirectorConfig) (director.Director, error) {
 			return nil, err
 		}
 		return director.NewReconcileDirector(cfg.ID, cfg.Cases), nil
+	case DirectorKindEventTable:
+		if err := validateEventTableEntries(cfg.Entries); err != nil {
+			return nil, err
+		}
+		return director.NewEventTableDirector(cfg.ID, cfg.Entries), nil
 	default:
 		return nil, fmt.Errorf("unsupported director kind %q", cfg.Kind)
 	}
@@ -80,6 +87,18 @@ func validateReconcileCases(cases []director.ReconcileCase) error {
 		}
 		if err := model.ValidateID(string(c.TargetMemoryID)); err != nil {
 			return fmt.Errorf("cases[%d].target_memory_id: %w", i, err)
+		}
+	}
+	return nil
+}
+
+func validateEventTableEntries(entries []director.EventTableEntry) error {
+	for i, entry := range entries {
+		if entry.Weight <= 0 {
+			return fmt.Errorf("entries[%d].weight must be positive", i)
+		}
+		if err := entry.Event.Validate(); err != nil {
+			return fmt.Errorf("entries[%d].event: %w", i, err)
 		}
 	}
 	return nil
