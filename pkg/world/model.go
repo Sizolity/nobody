@@ -126,6 +126,9 @@ const (
 	EffectCloseThread        = internal.EffectCloseThread
 	EffectAddEntity          = internal.EffectAddEntity
 	EffectRemoveEntity       = internal.EffectRemoveEntity
+	EffectRemoveRelation     = internal.EffectRemoveRelation
+	EffectRemoveFact         = internal.EffectRemoveFact
+	EffectRemoveMemory       = internal.EffectRemoveMemory
 )
 
 // Memory owner kind constants.

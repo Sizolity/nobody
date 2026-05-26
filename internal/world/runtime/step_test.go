@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -8,11 +9,13 @@ import (
 	"github.com/sizolity/nobody/internal/world/model"
 )
 
+var bg = context.Background()
+
 func TestRuntimeStepWithNoDirectorsReturnsNonNilEmptyResult(t *testing.T) {
 	t.Parallel()
 
 	world := model.World{ID: "world_1", Name: "World"}
-	got, err := NewRuntime(WithoutRules()).Step(world)
+	got, err := NewRuntime(WithoutRules()).Step(bg, world)
 	if err != nil {
 		t.Fatalf("Step returned error: %v", err)
 	}
@@ -50,7 +53,7 @@ func TestRuntimeStepAppliesDirectorProposals(t *testing.T) {
 			}},
 		}})),
 	)
-	got, err := rt.Step(model.World{ID: "world_1", Name: "World"})
+	got, err := rt.Step(bg, model.World{ID: "world_1", Name: "World"})
 	if err != nil {
 		t.Fatalf("Step returned error: %v", err)
 	}
@@ -83,7 +86,7 @@ func TestRuntimeStepDoesNotConsumeEventQueueByDefault(t *testing.T) {
 		}},
 	}
 
-	got, err := NewRuntime(WithoutRules()).Step(world)
+	got, err := NewRuntime(WithoutRules()).Step(bg, world)
 	if err != nil {
 		t.Fatalf("Step returned error: %v", err)
 	}
@@ -107,7 +110,7 @@ func TestRuntimeStepConsumesEventQueueWithLimit(t *testing.T) {
 		},
 	}
 
-	got, err := NewRuntime(WithoutRules(), WithEventQueueLimit(1)).Step(world)
+	got, err := NewRuntime(WithoutRules(), WithEventQueueLimit(1)).Step(bg, world)
 	if err != nil {
 		t.Fatalf("Step returned error: %v", err)
 	}
@@ -138,7 +141,7 @@ func TestRuntimeStepConsumesHighestPriorityReadyQueueItems(t *testing.T) {
 		},
 	}
 
-	got, err := NewRuntime(WithoutRules(), WithEventQueueLimit(2)).Step(world)
+	got, err := NewRuntime(WithoutRules(), WithEventQueueLimit(2)).Step(bg, world)
 	if err != nil {
 		t.Fatalf("Step returned error: %v", err)
 	}
@@ -165,7 +168,7 @@ func TestRuntimeStepKeepsEqualPriorityQueueOrder(t *testing.T) {
 		},
 	}
 
-	got, err := NewRuntime(WithoutRules(), WithEventQueueLimit(2)).Step(world)
+	got, err := NewRuntime(WithoutRules(), WithEventQueueLimit(2)).Step(bg, world)
 	if err != nil {
 		t.Fatalf("Step returned error: %v", err)
 	}
@@ -204,7 +207,7 @@ func TestRuntimeStepAppliesReconcileDirectorProposals(t *testing.T) {
 		}},
 	}
 
-	got, err := rt.Step(world)
+	got, err := rt.Step(bg, world)
 	if err != nil {
 		t.Fatalf("Step returned error: %v", err)
 	}
@@ -225,7 +228,7 @@ func TestRuntimeStepReturnsDirectorErrorsWithoutMutatingWorld(t *testing.T) {
 	world := model.World{ID: "world_1", Name: "World"}
 	rt := NewRuntime(WithoutRules(), WithDirectors(errorDirector{err: errors.New("boom")}))
 
-	got, err := rt.Step(world)
+	got, err := rt.Step(bg, world)
 	if err == nil {
 		t.Fatal("Step returned nil error")
 	}
@@ -265,7 +268,7 @@ func TestRuntimeStepDoesNotLetDirectorsMutateWorldThroughContext(t *testing.T) {
 		WithDirectors(mutatingDirector{}),
 	)
 
-	got, err := rt.Step(world)
+	got, err := rt.Step(bg, world)
 	if err != nil {
 		t.Fatalf("Step returned error: %v", err)
 	}
@@ -294,7 +297,7 @@ func TestRuntimeStepReturnsApplyErrorsWithPriorAppliedEvents(t *testing.T) {
 		})),
 	)
 
-	got, err := rt.Step(model.World{ID: "world_1", Name: "World"})
+	got, err := rt.Step(bg, model.World{ID: "world_1", Name: "World"})
 	if err == nil {
 		t.Fatal("Step returned nil error")
 	}
@@ -326,7 +329,7 @@ func TestRuntimeStepSkipsFailedQueuedEventWithSkipPolicy(t *testing.T) {
 		},
 	}
 
-	got, err := NewRuntime(WithoutRules(), WithEventQueueLimit(10)).Step(world)
+	got, err := NewRuntime(WithoutRules(), WithEventQueueLimit(10)).Step(bg, world)
 	if err != nil {
 		t.Fatalf("Step returned error: %v", err)
 	}
@@ -356,7 +359,7 @@ func TestRuntimeStepRetriesFailedQueuedEventWithRetryPolicy(t *testing.T) {
 		},
 	}
 
-	got, err := NewRuntime(WithoutRules(), WithEventQueueLimit(10)).Step(world)
+	got, err := NewRuntime(WithoutRules(), WithEventQueueLimit(10)).Step(bg, world)
 	if err != nil {
 		t.Fatalf("Step returned error: %v", err)
 	}
@@ -387,7 +390,7 @@ func TestRuntimeStepDropsRetryEventAfterMaxAttempts(t *testing.T) {
 		},
 	}
 
-	got, err := NewRuntime(WithoutRules(), WithEventQueueLimit(10)).Step(world)
+	got, err := NewRuntime(WithoutRules(), WithEventQueueLimit(10)).Step(bg, world)
 	if err != nil {
 		t.Fatalf("Step returned error: %v", err)
 	}
@@ -413,7 +416,7 @@ func TestRuntimeStepFailsPolicyStillFailsStep(t *testing.T) {
 		},
 	}
 
-	_, err := NewRuntime(WithoutRules(), WithEventQueueLimit(10)).Step(world)
+	_, err := NewRuntime(WithoutRules(), WithEventQueueLimit(10)).Step(bg, world)
 	if err == nil {
 		t.Fatal("Step should return error for fail policy")
 	}
@@ -427,7 +430,7 @@ func TestRuntimeStepAdvancesClockSequence(t *testing.T) {
 		Name:  "World",
 		Clock: model.WorldClock{Sequence: 10},
 	}
-	got, err := NewRuntime(WithoutRules()).Step(world)
+	got, err := NewRuntime(WithoutRules()).Step(bg, world)
 	if err != nil {
 		t.Fatalf("Step returned error: %v", err)
 	}
@@ -450,7 +453,7 @@ func TestRuntimeStepAdvancesTickClock(t *testing.T) {
 			Sequence: 0,
 		},
 	}
-	got, err := NewRuntime(WithoutRules()).Step(world)
+	got, err := NewRuntime(WithoutRules()).Step(bg, world)
 	if err != nil {
 		t.Fatalf("Step returned error: %v", err)
 	}
@@ -473,7 +476,7 @@ func TestRuntimeStepDoesNotAdvanceTickForNonTickClock(t *testing.T) {
 			Sequence: 0,
 		},
 	}
-	got, err := NewRuntime(WithoutRules()).Step(world)
+	got, err := NewRuntime(WithoutRules()).Step(bg, world)
 	if err != nil {
 		t.Fatalf("Step returned error: %v", err)
 	}

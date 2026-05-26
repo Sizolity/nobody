@@ -1,11 +1,14 @@
 package runtime
 
 import (
+	"context"
 	"testing"
 
 	"github.com/sizolity/nobody/internal/world/director"
 	"github.com/sizolity/nobody/internal/world/model"
 )
+
+var runBg = context.Background()
 
 func TestRuntimeRunExecutesMultipleSteps(t *testing.T) {
 	t.Parallel()
@@ -20,7 +23,7 @@ func TestRuntimeRunExecutesMultipleSteps(t *testing.T) {
 		Clock: model.WorldClock{Sequence: 0},
 	}
 
-	got, err := rt.Run(world, 3)
+	got, err := rt.Run(runBg, world, 3)
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
@@ -48,7 +51,7 @@ func TestRuntimeRunAccumulatesAppliedEvents(t *testing.T) {
 		Clock: model.WorldClock{Sequence: 0},
 	}
 
-	got, err := rt.Run(world, 2)
+	got, err := rt.Run(runBg, world, 2)
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
@@ -68,7 +71,7 @@ func TestRuntimeRunStopsOnError(t *testing.T) {
 	)
 	world := model.World{ID: "world_1", Name: "World"}
 
-	got, err := rt.Run(world, 5)
+	got, err := rt.Run(runBg, world, 5)
 	if err == nil {
 		t.Fatal("Run returned nil error for invalid event")
 	}
@@ -85,7 +88,7 @@ func TestRuntimeRunWithZeroStepsReturnsUnchangedWorld(t *testing.T) {
 		Name:  "World",
 		Clock: model.WorldClock{Sequence: 5},
 	}
-	got, err := NewRuntime(WithoutRules()).Run(world, 0)
+	got, err := NewRuntime(WithoutRules()).Run(runBg, world, 0)
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
@@ -110,7 +113,7 @@ func TestRuntimeRunDoesNotMutateInputWorld(t *testing.T) {
 		Clock: model.WorldClock{Sequence: 0},
 	}
 
-	_, err := rt.Run(world, 3)
+	_, err := rt.Run(runBg, world, 3)
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
@@ -138,7 +141,7 @@ func TestRuntimeRunRotatesEventTableDirectorAcrossSteps(t *testing.T) {
 		Clock: model.WorldClock{Sequence: 0},
 	}
 
-	got, err := rt.Run(world, 2)
+	got, err := rt.Run(runBg, world, 2)
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}

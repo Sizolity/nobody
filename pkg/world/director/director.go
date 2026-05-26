@@ -18,6 +18,9 @@ type ReconcileCase = internal.ReconcileCase
 type EventTableDirector = internal.EventTableDirector
 type EventTableEntry = internal.EventTableEntry
 type RandomDirector = internal.RandomDirector
+type LLMDirector = internal.LLMDirector
+type LLMDirectorConfig = internal.LLMDirectorConfig
+type TextGenerator = internal.TextGenerator
 
 func NewScriptDirector(id string, events []model.WorldEvent) ScriptDirector {
 	return internal.NewScriptDirector(id, events)
@@ -33,4 +36,8 @@ func NewEventTableDirector(id string, entries []EventTableEntry) EventTableDirec
 
 func NewRandomDirector(id string, entries []EventTableEntry, rng *rand.Rand) RandomDirector {
 	return internal.NewRandomDirector(id, entries, rng)
+}
+
+func NewLLMDirector(id string, config LLMDirectorConfig) LLMDirector {
+	return internal.NewLLMDirector(id, config)
 }

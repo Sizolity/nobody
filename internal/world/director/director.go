@@ -1,7 +1,11 @@
 // Package director contains world event proposal sources.
 package director
 
-import "github.com/sizolity/nobody/internal/world/model"
+import (
+	"context"
+
+	"github.com/sizolity/nobody/internal/world/model"
+)
 
 type Director interface {
 	ID() string
@@ -9,5 +13,6 @@ type Director interface {
 }
 
 type Context struct {
+	Ctx   context.Context
 	World model.World
 }

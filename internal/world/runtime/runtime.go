@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -22,7 +23,7 @@ type StepResult struct {
 	SkippedEvents []model.WorldEvent `json:"skipped_events,omitempty"`
 }
 
-func (r Runtime) Step(world model.World) (StepResult, error) {
+func (r Runtime) Step(ctx context.Context, world model.World) (StepResult, error) {
 	result := StepResult{
 		World:         world,
 		Proposals:     []model.WorldEvent{},
@@ -30,7 +31,7 @@ func (r Runtime) Step(world model.World) (StepResult, error) {
 		SkippedEvents: []model.WorldEvent{},
 	}
 	for _, d := range r.Directors {
-		proposals, err := d.Propose(director.Context{World: cloneWorldForMutation(result.World)})
+		proposals, err := d.Propose(director.Context{Ctx: ctx, World: cloneWorldForMutation(result.World)})
 		if err != nil {
 			return result, fmt.Errorf("director %q: %w", d.ID(), err)
 		}
@@ -84,13 +85,13 @@ type RunResult struct {
 	AllAppliedEvents []model.WorldEvent `json:"all_applied_events"`
 }
 
-func (r Runtime) Run(world model.World, steps int) (RunResult, error) {
+func (r Runtime) Run(ctx context.Context, world model.World, steps int) (RunResult, error) {
 	result := RunResult{
 		World:            world,
 		AllAppliedEvents: []model.WorldEvent{},
 	}
 	for i := 0; i < steps; i++ {
-		step, err := r.Step(result.World)
+		step, err := r.Step(ctx, result.World)
 		if err != nil {
 			return result, fmt.Errorf("step %d: %w", i, err)
 		}
@@ -269,10 +270,6 @@ func cloneAny(value any) any {
 	}
 }
 
-func nextReadyQueueIndex(world model.World) (int, bool) {
-	return nextReadyQueueIndexExcluding(world, nil)
-}
-
 func nextReadyQueueIndexExcluding(world model.World, exclude map[model.EventID]bool) (int, bool) {
 	bestIndex := -1
 	for i, item := range world.EventQueue {
@@ -346,12 +343,18 @@ func applyEffect(world model.World, effect model.Effect) (model.World, error) {
 		return applySetEntityComponent(world, effect)
 	case model.EffectAddRelation:
 		return applyAddRelation(world, effect)
+	case model.EffectRemoveRelation:
+		return applyRemoveRelation(world, effect)
 	case model.EffectAddMemory:
 		return applyAddMemory(world, effect)
 	case model.EffectReviseMemory:
 		return applyReviseMemory(world, effect)
 	case model.EffectReconcileMemory:
 		return applyReconcileMemory(world, effect)
+	case model.EffectRemoveMemory:
+		return applyRemoveMemory(world, effect)
+	case model.EffectRemoveFact:
+		return applyRemoveFact(world, effect)
 	case model.EffectEnqueueEvent:
 		return applyEnqueueEvent(world, effect)
 	case model.EffectOpenThread:
@@ -708,6 +711,36 @@ func updateThreadFromPayload(thread model.WorldThread, effect model.Effect) mode
 		thread.Tension = payloadOptionalFloat(effect, "tension")
 	}
 	return thread
+}
+
+func applyRemoveRelation(world model.World, effect model.Effect) (model.World, error) {
+	for i, rel := range world.Relations {
+		if string(rel.ID) == effect.TargetID {
+			world.Relations = append(world.Relations[:i], world.Relations[i+1:]...)
+			return world, nil
+		}
+	}
+	return model.World{}, fmt.Errorf("relation %q not found", effect.TargetID)
+}
+
+func applyRemoveFact(world model.World, effect model.Effect) (model.World, error) {
+	for i, fact := range world.Facts {
+		if string(fact.ID) == effect.TargetID {
+			world.Facts = append(world.Facts[:i], world.Facts[i+1:]...)
+			return world, nil
+		}
+	}
+	return model.World{}, fmt.Errorf("fact %q not found", effect.TargetID)
+}
+
+func applyRemoveMemory(world model.World, effect model.Effect) (model.World, error) {
+	for i, mem := range world.Memory {
+		if string(mem.ID) == effect.TargetID {
+			world.Memory = append(world.Memory[:i], world.Memory[i+1:]...)
+			return world, nil
+		}
+	}
+	return model.World{}, fmt.Errorf("memory %q not found", effect.TargetID)
 }
 
 func applyAddEntity(world model.World, effect model.Effect) (model.World, error) {

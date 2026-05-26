@@ -51,7 +51,7 @@ func (r Runner) Run(ctx context.Context, worldID string, steps int) (worldruntim
 	if err != nil {
 		return worldruntime.RunResult{}, err
 	}
-	result, err := r.runtime.Run(world, steps)
+	result, err := r.runtime.Run(ctx, world, steps)
 	if err != nil {
 		return result, err
 	}
@@ -69,7 +69,7 @@ func (r Runner) Step(ctx context.Context, worldID string) (worldruntime.StepResu
 	if err != nil {
 		return worldruntime.StepResult{}, err
 	}
-	result, err := r.runtime.Step(world)
+	result, err := r.runtime.Step(ctx, world)
 	if err != nil {
 		return result, err
 	}

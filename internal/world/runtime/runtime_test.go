@@ -729,6 +729,144 @@ func TestRuntimeAppliesRemoveEntityEffect(t *testing.T) {
 	}
 }
 
+func TestRuntimeAppliesRemoveRelationEffect(t *testing.T) {
+	t.Parallel()
+
+	rt := Runtime{}
+	world := model.World{
+		ID:   "test_world",
+		Name: "Test World",
+		Relations: []model.Relation{
+			{ID: "rel_1", Type: "owns", SourceID: "hero", TargetID: "sword"},
+			{ID: "rel_2", Type: "knows", SourceID: "hero", TargetID: "wizard"},
+		},
+	}
+	event := model.WorldEvent{
+		ID:     "event_1",
+		Type:   model.EventTypeRelationshipChanged,
+		Source: model.EventSourceRuntime,
+		Effects: []model.Effect{{
+			Kind:     model.EffectRemoveRelation,
+			TargetID: "rel_1",
+		}},
+	}
+
+	got, err := rt.ApplyEvent(world, event)
+	if err != nil {
+		t.Fatalf("ApplyEvent returned error: %v", err)
+	}
+	if len(got.Relations) != 1 || got.Relations[0].ID != "rel_2" {
+		t.Fatalf("Relations = %#v, want only rel_2", got.Relations)
+	}
+	if len(world.Relations) != 2 {
+		t.Fatalf("input world was mutated")
+	}
+}
+
+func TestRuntimeRejectsRemoveRelationMissingID(t *testing.T) {
+	t.Parallel()
+
+	rt := Runtime{}
+	world := model.World{ID: "test_world", Name: "Test World"}
+	event := model.WorldEvent{
+		ID:     "event_1",
+		Type:   model.EventTypeRelationshipChanged,
+		Source: model.EventSourceRuntime,
+		Effects: []model.Effect{{
+			Kind:     model.EffectRemoveRelation,
+			TargetID: "nonexistent",
+		}},
+	}
+
+	if _, err := rt.ApplyEvent(world, event); err == nil {
+		t.Fatal("ApplyEvent returned nil for removing nonexistent relation")
+	}
+}
+
+func TestRuntimeAppliesRemoveFactEffect(t *testing.T) {
+	t.Parallel()
+
+	rt := Runtime{}
+	world := model.World{
+		ID:   "test_world",
+		Name: "Test World",
+		Facts: []model.Fact{
+			{ID: "fact_1", SubjectID: "door", Predicate: "locked", Value: model.Value{Kind: model.ValueKindBoolean, Raw: true}},
+			{ID: "fact_2", SubjectID: "tower", Predicate: "status", Value: model.Value{Kind: model.ValueKindString, Raw: "sealed"}},
+		},
+	}
+	event := model.WorldEvent{
+		ID:     "event_1",
+		Type:   model.EventTypeWorldFactChanged,
+		Source: model.EventSourceRuntime,
+		Effects: []model.Effect{{
+			Kind:     model.EffectRemoveFact,
+			TargetID: "fact_1",
+		}},
+	}
+
+	got, err := rt.ApplyEvent(world, event)
+	if err != nil {
+		t.Fatalf("ApplyEvent returned error: %v", err)
+	}
+	if len(got.Facts) != 1 || got.Facts[0].ID != "fact_2" {
+		t.Fatalf("Facts = %#v, want only fact_2", got.Facts)
+	}
+}
+
+func TestRuntimeRejectsRemoveFactMissingID(t *testing.T) {
+	t.Parallel()
+
+	if _, err := (Runtime{}).ApplyEvent(
+		model.World{ID: "test_world", Name: "Test World"},
+		model.WorldEvent{ID: "event_1", Type: model.EventTypeWorldFactChanged, Source: model.EventSourceRuntime, Effects: []model.Effect{{Kind: model.EffectRemoveFact, TargetID: "nonexistent"}}},
+	); err == nil {
+		t.Fatal("ApplyEvent returned nil for removing nonexistent fact")
+	}
+}
+
+func TestRuntimeAppliesRemoveMemoryEffect(t *testing.T) {
+	t.Parallel()
+
+	rt := Runtime{}
+	world := model.World{
+		ID:   "test_world",
+		Name: "Test World",
+		Memory: []model.MemoryRecord{
+			{ID: "memory_1", Owner: model.MemoryOwner{Kind: model.MemoryOwnerKindWorld}, Content: "The king is dead.", TruthStatus: model.TruthStatusTrue},
+			{ID: "memory_2", Owner: model.MemoryOwner{Kind: model.MemoryOwnerKindCharacter, ID: "char_c"}, Content: "I saw a shadow.", TruthStatus: model.TruthStatusUnknown},
+		},
+	}
+	event := model.WorldEvent{
+		ID:     "event_1",
+		Type:   model.EventTypeRemember,
+		Source: model.EventSourceRuntime,
+		Effects: []model.Effect{{
+			Kind:     model.EffectRemoveMemory,
+			TargetID: "memory_1",
+		}},
+	}
+
+	got, err := rt.ApplyEvent(world, event)
+	if err != nil {
+		t.Fatalf("ApplyEvent returned error: %v", err)
+	}
+	if len(got.Memory) != 1 || got.Memory[0].ID != "memory_2" {
+		t.Fatalf("Memory = %#v, want only memory_2", got.Memory)
+	}
+}
+
+func TestRuntimeRejectsRemoveMemoryMissingID(t *testing.T) {
+	t.Parallel()
+
+	if _, err := (Runtime{}).ApplyEvent(
+		model.World{ID: "test_world", Name: "Test World"},
+		model.WorldEvent{ID: "event_1", Type: model.EventTypeRemember, Source: model.EventSourceRuntime, Effects: []model.Effect{{Kind: model.EffectRemoveMemory, TargetID: "nonexistent"}}},
+	); err == nil {
+		t.Fatal("ApplyEvent returned nil for removing nonexistent memory")
+	}
+}
+
 func TestRuntimeRejectsRemoveEntityMissingID(t *testing.T) {
 	t.Parallel()
 

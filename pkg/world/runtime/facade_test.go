@@ -1,6 +1,7 @@
 package runtime_test
 
 import (
+	"context"
 	"testing"
 
 	"github.com/sizolity/nobody/pkg/world"
@@ -33,7 +34,7 @@ func TestPublicRuntimeStepAdvancesClock(t *testing.T) {
 		Clock: world.WorldClock{Sequence: 0},
 	}
 
-	got, err := rt.Step(w)
+	got, err := rt.Step(context.Background(), w)
 	if err != nil {
 		t.Fatalf("Step returned error: %v", err)
 	}
