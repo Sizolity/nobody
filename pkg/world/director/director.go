@@ -21,6 +21,8 @@ type RandomDirector = internal.RandomDirector
 type LLMDirector = internal.LLMDirector
 type LLMDirectorConfig = internal.LLMDirectorConfig
 type TextGenerator = internal.TextGenerator
+type DeepSeekGenerator = internal.DeepSeekGenerator
+type DeepSeekGeneratorConfig = internal.DeepSeekGeneratorConfig
 
 func NewScriptDirector(id string, events []model.WorldEvent) ScriptDirector {
 	return internal.NewScriptDirector(id, events)
@@ -40,4 +42,8 @@ func NewRandomDirector(id string, entries []EventTableEntry, rng *rand.Rand) Ran
 
 func NewLLMDirector(id string, config LLMDirectorConfig) LLMDirector {
 	return internal.NewLLMDirector(id, config)
+}
+
+func NewDeepSeekGenerator(config DeepSeekGeneratorConfig) *DeepSeekGenerator {
+	return internal.NewDeepSeekGenerator(config)
 }
