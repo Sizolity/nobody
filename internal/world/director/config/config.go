@@ -15,6 +15,7 @@ const (
 	DirectorKindReconcile  = "reconcile"
 	DirectorKindEventTable = "event_table"
 	DirectorKindRandom     = "random"
+	DirectorKindLLM        = "llm"
 )
 
 type File struct {
@@ -22,22 +23,43 @@ type File struct {
 }
 
 type DirectorConfig struct {
-	ID      string                     `json:"id"`
-	Kind    string                     `json:"kind"`
-	Events  []model.WorldEvent         `json:"events,omitempty"`
-	Cases   []director.ReconcileCase   `json:"cases,omitempty"`
-	Entries []director.EventTableEntry `json:"entries,omitempty"`
-	Seed    *int64                     `json:"seed,omitempty"`
+	ID           string                     `json:"id"`
+	Kind         string                     `json:"kind"`
+	Events       []model.WorldEvent         `json:"events,omitempty"`
+	Cases        []director.ReconcileCase   `json:"cases,omitempty"`
+	Entries      []director.EventTableEntry `json:"entries,omitempty"`
+	Seed         *int64                     `json:"seed,omitempty"`
+	SystemPrompt string                     `json:"system_prompt,omitempty"`
+	Provider     string                     `json:"provider,omitempty"`
+	Model        string                     `json:"model,omitempty"`
 }
 
-func LoadDirectors(data []byte) ([]director.Director, error) {
+// GeneratorFactory builds a TextGenerator from the provider and model
+// specified in a director config entry. The config package does not import
+// any inference provider; callers inject this factory to wire provider-
+// specific generators (DeepSeek, OpenAI, etc.).
+type GeneratorFactory func(provider, model string) (director.TextGenerator, error)
+
+// LoadOptions configures optional dependencies for LoadDirectors.
+type LoadOptions struct {
+	// GeneratorFactory is required when any director uses kind "llm".
+	// It receives the provider and model from the JSON config and returns
+	// the corresponding TextGenerator.
+	GeneratorFactory GeneratorFactory
+}
+
+func LoadDirectors(data []byte, opts ...LoadOptions) ([]director.Director, error) {
+	var opt LoadOptions
+	if len(opts) > 0 {
+		opt = opts[0]
+	}
 	var file File
 	if err := json.Unmarshal(data, &file); err != nil {
 		return nil, err
 	}
 	directors := make([]director.Director, 0, len(file.Directors))
 	for i, cfg := range file.Directors {
-		d, err := buildDirector(cfg)
+		d, err := buildDirector(cfg, opt)
 		if err != nil {
 			return nil, fmt.Errorf("directors[%d]: %w", i, err)
 		}
@@ -46,7 +68,7 @@ func LoadDirectors(data []byte) ([]director.Director, error) {
 	return directors, nil
 }
 
-func buildDirector(cfg DirectorConfig) (director.Director, error) {
+func buildDirector(cfg DirectorConfig, opt LoadOptions) (director.Director, error) {
 	if err := model.ValidateID(cfg.ID); err != nil {
 		return nil, fmt.Errorf("id: %w", err)
 	}
@@ -78,6 +100,22 @@ func buildDirector(cfg DirectorConfig) (director.Director, error) {
 			rng = rand.New(rand.NewSource(*cfg.Seed))
 		}
 		return director.NewRandomDirector(cfg.ID, cfg.Entries, rng), nil
+	case DirectorKindLLM:
+		if opt.GeneratorFactory == nil {
+			return nil, fmt.Errorf("llm director requires a GeneratorFactory in LoadOptions")
+		}
+		provider := cfg.Provider
+		if provider == "" {
+			provider = "deepseek"
+		}
+		gen, err := opt.GeneratorFactory(provider, cfg.Model)
+		if err != nil {
+			return nil, fmt.Errorf("generator factory: %w", err)
+		}
+		return director.NewLLMDirector(cfg.ID, director.LLMDirectorConfig{
+			SystemPrompt: cfg.SystemPrompt,
+			Generator:    gen,
+		}), nil
 	default:
 		return nil, fmt.Errorf("unsupported director kind %q", cfg.Kind)
 	}

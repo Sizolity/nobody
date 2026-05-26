@@ -1,7 +1,9 @@
 package config
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/sizolity/nobody/internal/world/director"
@@ -289,4 +291,137 @@ func TestDirectorConfigJSONRoundTrip(t *testing.T) {
 	if got.Directors[2].Kind != DirectorKindRandom || got.Directors[2].Seed == nil || *got.Directors[2].Seed != 42 {
 		t.Fatalf("random config mismatch: %#v", got.Directors[2])
 	}
+}
+
+func TestLoadDirectorsBuildsLLMDirector(t *testing.T) {
+	t.Parallel()
+
+	const data = `{
+  "directors": [
+    {
+      "id": "llm_1",
+      "kind": "llm",
+      "provider": "deepseek",
+      "model": "deepseek-v4-pro",
+      "system_prompt": "You are a world director."
+    }
+  ]
+}`
+
+	factory := func(provider, model string) (director.TextGenerator, error) {
+		if provider != "deepseek" {
+			t.Fatalf("provider = %q, want deepseek", provider)
+		}
+		if model != "deepseek-v4-pro" {
+			t.Fatalf("model = %q, want deepseek-v4-pro", model)
+		}
+		return &stubGenerator{response: "[]"}, nil
+	}
+
+	directors, err := LoadDirectors([]byte(data), LoadOptions{GeneratorFactory: factory})
+	if err != nil {
+		t.Fatalf("LoadDirectors returned error: %v", err)
+	}
+	if len(directors) != 1 || directors[0].ID() != "llm_1" {
+		t.Fatalf("directors mismatch: %#v", directors)
+	}
+	got, err := directors[0].Propose(director.Context{
+		Ctx:   context.Background(),
+		World: model.World{ID: "w", Name: "W"},
+	})
+	if err != nil {
+		t.Fatalf("Propose returned error: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected empty proposals from stub: %#v", got)
+	}
+}
+
+func TestLoadDirectorsLLMDefaultsProviderToDeepseek(t *testing.T) {
+	t.Parallel()
+
+	const data = `{
+  "directors": [{"id": "llm_1", "kind": "llm"}]
+}`
+
+	var gotProvider string
+	factory := func(provider, model string) (director.TextGenerator, error) {
+		gotProvider = provider
+		return &stubGenerator{response: "[]"}, nil
+	}
+
+	_, err := LoadDirectors([]byte(data), LoadOptions{GeneratorFactory: factory})
+	if err != nil {
+		t.Fatalf("LoadDirectors returned error: %v", err)
+	}
+	if gotProvider != "deepseek" {
+		t.Fatalf("default provider = %q, want deepseek", gotProvider)
+	}
+}
+
+func TestLoadDirectorsLLMRejectsWithoutFactory(t *testing.T) {
+	t.Parallel()
+
+	const data = `{
+  "directors": [{"id": "llm_1", "kind": "llm"}]
+}`
+
+	_, err := LoadDirectors([]byte(data))
+	if err == nil {
+		t.Fatal("expected error when llm kind used without GeneratorFactory")
+	}
+}
+
+func TestLoadDirectorsLLMRejectsFactoryError(t *testing.T) {
+	t.Parallel()
+
+	const data = `{
+  "directors": [{"id": "llm_1", "kind": "llm", "provider": "unknown"}]
+}`
+
+	factory := func(provider, model string) (director.TextGenerator, error) {
+		return nil, fmt.Errorf("unsupported provider %q", provider)
+	}
+
+	_, err := LoadDirectors([]byte(data), LoadOptions{GeneratorFactory: factory})
+	if err == nil {
+		t.Fatal("expected error from factory")
+	}
+}
+
+func TestDirectorConfigLLMJSONRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	cfg := File{
+		Directors: []DirectorConfig{{
+			ID:           "llm_1",
+			Kind:         DirectorKindLLM,
+			Provider:     "deepseek",
+			Model:        "deepseek-v4-pro",
+			SystemPrompt: "You are a narrator.",
+		}},
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("Marshal returned error: %v", err)
+	}
+	var got File
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("Unmarshal returned error: %v", err)
+	}
+	if len(got.Directors) != 1 {
+		t.Fatalf("directors count = %d, want 1", len(got.Directors))
+	}
+	d := got.Directors[0]
+	if d.Kind != DirectorKindLLM || d.Provider != "deepseek" || d.Model != "deepseek-v4-pro" || d.SystemPrompt != "You are a narrator." {
+		t.Fatalf("llm config mismatch: %#v", d)
+	}
+}
+
+type stubGenerator struct {
+	response string
+}
+
+func (g *stubGenerator) Generate(_ context.Context, _, _ string) (string, error) {
+	return g.response, nil
 }

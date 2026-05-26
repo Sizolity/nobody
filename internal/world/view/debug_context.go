@@ -10,15 +10,15 @@ import (
 // WorldDebugContext is a read-only GM/debug projection that exposes the
 // complete world truth with no ownership or visibility filtering.
 type WorldDebugContext struct {
-	World      WorldSummary           `json:"world"`
-	Entities   []model.Entity         `json:"entities"`
-	Facts      []model.Fact           `json:"facts"`
-	Relations  []model.Relation       `json:"relations"`
-	Memories   []model.MemoryRecord   `json:"memories"`
-	Threads    []model.WorldThread    `json:"threads"`
-	Rules      []model.Rule           `json:"rules"`
-	EventLog   []model.WorldEvent     `json:"event_log"`
-	EventQueue []model.EventQueueItem `json:"event_queue"`
+	World      WorldSummary         `json:"world"`
+	Entities   []model.Entity       `json:"entities"`
+	Facts      []model.Fact         `json:"facts"`
+	Relations  []model.Relation     `json:"relations"`
+	Memories   []model.MemoryRecord `json:"memories"`
+	Threads    []model.WorldThread  `json:"threads"`
+	Rules      []model.Rule         `json:"rules"`
+	EventLog   []model.WorldEvent   `json:"event_log"`
+	EventQueue []model.WorldEvent   `json:"event_queue"`
 }
 
 // WorldSummary captures top-level world metadata without the collection fields.
@@ -58,7 +58,7 @@ func (v WorldDebugView) Render(w model.World) WorldDebugContext {
 		Threads:    nonNilClone(w.Threads),
 		Rules:      nonNilClone(w.Rules),
 		EventLog:   cloneEvents(w.EventLog),
-		EventQueue: cloneEventQueue(w.EventQueue),
+		EventQueue: cloneEvents(w.EventQueue),
 	}
 }
 
@@ -128,17 +128,6 @@ func cloneEvents(events []model.WorldEvent) []model.WorldEvent {
 		out[i].ActorIDs = nonNilClone(out[i].ActorIDs)
 		out[i].TargetIDs = nonNilClone(out[i].TargetIDs)
 		out[i].Effects = cloneEffects(out[i].Effects)
-	}
-	return out
-}
-
-func cloneEventQueue(queue []model.EventQueueItem) []model.EventQueueItem {
-	out := nonNilClone(queue)
-	for i := range out {
-		out[i].Event.ActorIDs = nonNilClone(out[i].Event.ActorIDs)
-		out[i].Event.TargetIDs = nonNilClone(out[i].Event.TargetIDs)
-		out[i].Event.Effects = cloneEffects(out[i].Event.Effects)
-		out[i].NotBefore.Calendar = cloneIntMap(out[i].NotBefore.Calendar)
 	}
 	return out
 }

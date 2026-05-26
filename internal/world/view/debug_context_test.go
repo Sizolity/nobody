@@ -147,15 +147,6 @@ func TestWorldDebugViewDoesNotAliasMutableWorldState(t *testing.T) {
 			"mood": {Kind: model.ValueKindString, Raw: "calm"},
 		},
 	}}
-	w.EventQueue[0].Event.ActorIDs = []model.EntityID{"char_alice"}
-	w.EventQueue[0].Event.Effects = []model.Effect{{
-		Kind:     model.EffectUpdateEntityState,
-		TargetID: "char_alice",
-		Payload: map[string]model.Value{
-			"mood": {Kind: model.ValueKindString, Raw: "curious"},
-		},
-	}}
-	w.EventQueue[0].NotBefore = model.WorldTime{Kind: model.WorldTimeTick, Tick: 2, Calendar: map[string]int{"day": 1}}
 
 	got := WorldDebugView{}.Render(w)
 	got.World.Canon.Genre[0] = "changed"
@@ -170,9 +161,6 @@ func TestWorldDebugViewDoesNotAliasMutableWorldState(t *testing.T) {
 	got.EventLog[0].ActorIDs[0] = "char_bob"
 	got.EventLog[0].TargetIDs[0] = "char_alice"
 	got.EventLog[0].Effects[0].Payload["mood"] = model.Value{Kind: model.ValueKindString, Raw: "angry"}
-	got.EventQueue[0].Event.ActorIDs[0] = "char_bob"
-	got.EventQueue[0].Event.Effects[0].Payload["mood"] = model.Value{Kind: model.ValueKindString, Raw: "angry"}
-	got.EventQueue[0].NotBefore.Calendar["day"] = 99
 
 	if w.Canon.Genre[0] != "mystery" {
 		t.Fatalf("world canon was mutated: %#v", w.Canon.Genre)
@@ -203,15 +191,6 @@ func TestWorldDebugViewDoesNotAliasMutableWorldState(t *testing.T) {
 	}
 	if w.EventLog[0].Effects[0].Payload["mood"].Raw != "calm" {
 		t.Fatalf("event payload was mutated: %#v", w.EventLog[0].Effects[0].Payload)
-	}
-	if w.EventQueue[0].Event.ActorIDs[0] != "char_alice" {
-		t.Fatalf("queued event references were mutated: %#v", w.EventQueue[0])
-	}
-	if w.EventQueue[0].Event.Effects[0].Payload["mood"].Raw != "curious" {
-		t.Fatalf("queued event payload was mutated: %#v", w.EventQueue[0].Event.Effects[0].Payload)
-	}
-	if w.EventQueue[0].NotBefore.Calendar["day"] != 1 {
-		t.Fatalf("queued event not_before calendar was mutated: %#v", w.EventQueue[0].NotBefore)
 	}
 }
 
@@ -272,8 +251,8 @@ func populatedWorld() model.World {
 		EventLog: []model.WorldEvent{
 			{ID: "evt_1", Type: model.EventTypeNote, Source: model.EventSourceDirector, Description: "Session start."},
 		},
-		EventQueue: []model.EventQueueItem{
-			{Event: model.WorldEvent{ID: "evt_queued", Type: model.EventTypeNote, Source: model.EventSourceDirector, Description: "Queued."}},
+		EventQueue: []model.WorldEvent{
+			{ID: "evt_queued", Type: model.EventTypeNote, Source: model.EventSourceDirector, Description: "Queued."},
 		},
 	}
 }

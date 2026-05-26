@@ -688,6 +688,72 @@ func TestRunBridgeContextOutputsNarrativeBundle(t *testing.T) {
 	}
 }
 
+func TestRunStepLLMRequiresAPIKey(t *testing.T) {
+	workspace := t.TempDir()
+	ctx := context.Background()
+	st := store.NewFileStore(workspace)
+	if err := st.SaveSnapshot(ctx, model.World{ID: "test_world", Name: "Test World"}); err != nil {
+		t.Fatalf("SaveSnapshot returned error: %v", err)
+	}
+
+	t.Setenv("DEEPSEEK_API_KEY", "")
+	var stdout, stderr bytes.Buffer
+	code := Run(ctx, []string{
+		"step-llm",
+		"--workspace", workspace,
+		"--world-id", "test_world",
+	}, &stdout, &stderr)
+	if code == 0 {
+		t.Fatal("step-llm should fail without DEEPSEEK_API_KEY")
+	}
+	if !bytes.Contains(stderr.Bytes(), []byte("DEEPSEEK_API_KEY")) {
+		t.Fatalf("stderr should mention DEEPSEEK_API_KEY: %s", stderr.String())
+	}
+}
+
+func TestRunStepLLMRequiresFlags(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{"step-llm"}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("step-llm with no flags should exit 2, got %d", code)
+	}
+}
+
+func TestRunStepConfigWithLLMKindRequiresAPIKey(t *testing.T) {
+	workspace := t.TempDir()
+	ctx := context.Background()
+	st := store.NewFileStore(workspace)
+	if err := st.SaveSnapshot(ctx, model.World{ID: "test_world", Name: "Test World"}); err != nil {
+		t.Fatalf("SaveSnapshot returned error: %v", err)
+	}
+	configPath := filepath.Join(workspace, "directors.json")
+	const configJSON = `{
+  "directors": [
+    {"id": "llm_1", "kind": "llm", "provider": "deepseek"}
+  ]
+}`
+	if err := os.WriteFile(configPath, []byte(configJSON), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	t.Setenv("DEEPSEEK_API_KEY", "")
+	var stdout, stderr bytes.Buffer
+	code := Run(ctx, []string{
+		"step-config",
+		"--workspace", workspace,
+		"--world-id", "test_world",
+		"--config-file", configPath,
+	}, &stdout, &stderr)
+	if code == 0 {
+		t.Fatal("step-config with llm kind should fail without DEEPSEEK_API_KEY")
+	}
+	if !bytes.Contains(stderr.Bytes(), []byte("DEEPSEEK_API_KEY")) {
+		t.Fatalf("stderr should mention DEEPSEEK_API_KEY: %s", stderr.String())
+	}
+}
+
 func writeTestJSON(t *testing.T, path string, v any) {
 	t.Helper()
 	data, err := json.Marshal(v)
