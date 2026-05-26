@@ -117,6 +117,51 @@ func (a *LLMWriterAgent) WriteBeat(ctx context.Context, bundle ContextBundle, pl
 	return draft, nil
 }
 
+type rewriteInput struct {
+	Context ContextBundle     `json:"context"`
+	Plan    BeatPlan          `json:"plan"`
+	Draft   narrative.Draft   `json:"previous_draft"`
+	Issues  []ContinuityIssue `json:"continuity_issues"`
+}
+
+const rewriteSystemPrompt = `You are a narrative scene writer revising a draft based on continuity feedback.
+
+You previously wrote a scene that has continuity issues. Rewrite the scene to fix ALL listed issues while preserving the narrative intent and quality.
+
+Return JSON (same schema as the original draft):
+
+{
+  "id": "draft_<short_id>_rev",
+  "beat_id": "<must match the original beat_id>",
+  "title": "Short scene title",
+  "kind": "scene",
+  "text": "The revised narrative text. 2-5 paragraphs."
+}
+
+Rules:
+- Fix every continuity issue listed. Do not introduce new issues.
+- Keep the same beat_id as the original draft.
+- Preserve the original scene's tone, objective, and key narrative beats where possible.
+- Return ONLY valid JSON. No markdown, no explanation.`
+
+func (a *LLMWriterAgent) RewriteBeat(ctx context.Context, bundle ContextBundle, plan BeatPlan, draft narrative.Draft, issues []ContinuityIssue) (narrative.Draft, error) {
+	userPrompt, err := json.Marshal(rewriteInput{
+		Context: bundle, Plan: plan, Draft: draft, Issues: issues,
+	})
+	if err != nil {
+		return narrative.Draft{}, fmt.Errorf("marshal rewrite input: %w", err)
+	}
+	response, err := a.gen.Generate(ctx, rewriteSystemPrompt, string(userPrompt))
+	if err != nil {
+		return narrative.Draft{}, fmt.Errorf("llm rewrite: %w", err)
+	}
+	var revised narrative.Draft
+	if err := json.Unmarshal([]byte(stripFences(response)), &revised); err != nil {
+		return narrative.Draft{}, fmt.Errorf("parse revised draft: %w", err)
+	}
+	return revised, nil
+}
+
 // --- LLM Continuity Agent ---
 
 const continuitySystemPrompt = `You are a continuity checker for an interactive narrative. Given the world state, characters, locations, recent events, memories, and a draft scene, identify continuity issues.

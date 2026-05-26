@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
 	bridgenarrative "github.com/sizolity/nobody/internal/bridge/narrative"
+	"github.com/sizolity/nobody/internal/narrative/engine"
 	"github.com/sizolity/nobody/internal/world/model"
 	"github.com/sizolity/nobody/internal/world/store"
 	worldview "github.com/sizolity/nobody/internal/world/view"
@@ -1057,7 +1059,7 @@ func TestRunBeatMissingWorld(t *testing.T) {
 	}
 }
 
-func TestExecuteBeatPipelineProducesJSON(t *testing.T) {
+func TestExecuteBeatPipelineReturnsOutput(t *testing.T) {
 	t.Parallel()
 
 	world := inspectionWorld()
@@ -1071,16 +1073,13 @@ func TestExecuteBeatPipelineProducesJSON(t *testing.T) {
 		`{"graph":{"current_node_id":"thread_open","nodes":[{"id":"thread_open","type":"mystery","status":"active","goal":"Open mystery"}]}}`,
 	}}
 
-	var stdout, stderr bytes.Buffer
-	code := executeBeatPipeline(context.Background(), gen, world, bundle, nil, &stdout, &stderr)
-	if code != 0 {
-		t.Fatalf("executeBeatPipeline exit %d, stderr=%s", code, stderr.String())
+	var stderr bytes.Buffer
+	result, err := executeBeatPipeline(context.Background(), gen, world, bundle, nil, 0, &stderr)
+	if err != nil {
+		t.Fatalf("executeBeatPipeline error: %v, stderr=%s", err, stderr.String())
 	}
 
-	var out beatOutput
-	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
-		t.Fatalf("unmarshal output: %v\nraw: %s", err, stdout.String())
-	}
+	out := result.Output
 	if out.WorldID != "test_world" {
 		t.Errorf("world_id = %q", out.WorldID)
 	}
@@ -1118,10 +1117,9 @@ func TestExecuteBeatPipelineProducesJSON(t *testing.T) {
 		t.Errorf("graph nodes = %d", out.Graph.NodeCount)
 	}
 
-	stderrStr := stderr.String()
 	for _, want := range []string{"beat planned", "draft written", "continuity:", "memory:", "graph:"} {
 		if !bytes.Contains(stderr.Bytes(), []byte(want)) {
-			t.Errorf("stderr missing %q: %s", want, stderrStr)
+			t.Errorf("stderr missing %q: %s", want, stderr.String())
 		}
 	}
 }
@@ -1134,13 +1132,13 @@ func TestExecuteBeatPipelineDirectorError(t *testing.T) {
 
 	gen := &beatFakeGenerator{responses: []string{`not json`}}
 
-	var stdout, stderr bytes.Buffer
-	code := executeBeatPipeline(context.Background(), gen, world, bundle, nil, &stdout, &stderr)
-	if code != 1 {
-		t.Fatalf("expected exit 1, got %d", code)
+	var stderr bytes.Buffer
+	_, err := executeBeatPipeline(context.Background(), gen, world, bundle, nil, 0, &stderr)
+	if err == nil {
+		t.Fatal("expected error")
 	}
-	if !bytes.Contains(stderr.Bytes(), []byte("director plan")) {
-		t.Errorf("stderr should mention director plan failure: %s", stderr.String())
+	if !bytes.Contains([]byte(err.Error()), []byte("director plan")) {
+		t.Errorf("error should mention director plan: %v", err)
 	}
 }
 
@@ -1170,19 +1168,19 @@ func TestExecuteBeatPipelineApplyPersistsToWorld(t *testing.T) {
 		`{"graph":{"current_node_id":"t1","nodes":[{"id":"t1","type":"quest","status":"completed","goal":"Find artifact"}]}}`,
 	}}
 
-	var stdout, stderr bytes.Buffer
-	code := executeBeatPipeline(ctx, gen, world, bundle, st, &stdout, &stderr)
-	if code != 0 {
-		t.Fatalf("exit %d, stderr=%s", code, stderr.String())
+	var stderr bytes.Buffer
+	_, err := executeBeatPipeline(ctx, gen, world, bundle, st, 0, &stderr)
+	if err != nil {
+		t.Fatalf("error: %v, stderr=%s", err, stderr.String())
 	}
 
 	if !bytes.Contains(stderr.Bytes(), []byte("applied:")) {
 		t.Error("stderr missing 'applied:' message")
 	}
 
-	updated, err := st.LoadSnapshot(ctx, "w")
-	if err != nil {
-		t.Fatalf("LoadSnapshot: %v", err)
+	updated, loadErr := st.LoadSnapshot(ctx, "w")
+	if loadErr != nil {
+		t.Fatalf("LoadSnapshot: %v", loadErr)
 	}
 	if updated.Clock.Sequence != 1 {
 		t.Errorf("sequence = %d, want 1", updated.Clock.Sequence)
@@ -1195,6 +1193,189 @@ func TestExecuteBeatPipelineApplyPersistsToWorld(t *testing.T) {
 	}
 	if updated.Threads[0].Status != model.ThreadStatusResolved {
 		t.Errorf("thread status = %q, want resolved", updated.Threads[0].Status)
+	}
+}
+
+func TestExecuteBeatPipelineRewritesOnContinuityIssues(t *testing.T) {
+	t.Parallel()
+
+	world := inspectionWorld()
+	bundle := bridgenarrative.AdaptWorld(world, bridgenarrative.Options{RecentEvents: 10})
+
+	gen := &beatFakeGenerator{responses: []string{
+		// 1: director plan
+		`{"beat_id":"beat_rw","objective":"Test rewrite","target_node_id":"thread_open"}`,
+		// 2: writer initial draft
+		`{"id":"draft_v1","beat_id":"beat_rw","title":"Bad Scene","kind":"scene","text":"Bob in wrong place."}`,
+		// 3: continuity check → finds issue
+		`{"issues":[{"code":"LOCATION_MISMATCH","summary":"Bob should be elsewhere."}]}`,
+		// 4: writer rewrite
+		`{"id":"draft_v2","beat_id":"beat_rw","title":"Fixed Scene","kind":"scene","text":"Bob is at market."}`,
+		// 5: continuity re-check → clean
+		`{"issues":[]}`,
+		// 6: memory extract
+		`{"events":[{"id":"ev_rw","beat_id":"beat_rw","type":"scene","summary":"Scene."}],"memories":[]}`,
+		// 7: state update
+		`{"graph":{"current_node_id":"thread_open","nodes":[{"id":"thread_open","type":"mystery","status":"active","goal":"Open mystery"}]}}`,
+	}}
+
+	var stderr bytes.Buffer
+	result, err := executeBeatPipeline(context.Background(), gen, world, bundle, nil, 2, &stderr)
+	if err != nil {
+		t.Fatalf("error: %v, stderr=%s", err, stderr.String())
+	}
+
+	if result.Output.Draft.Title != "Fixed Scene" {
+		t.Errorf("draft title = %q, want Fixed Scene (rewritten)", result.Output.Draft.Title)
+	}
+	if len(result.Output.ContinuityIssues) != 0 {
+		t.Errorf("final issues = %d, want 0", len(result.Output.ContinuityIssues))
+	}
+
+	stderrStr := stderr.String()
+	if !bytes.Contains(stderr.Bytes(), []byte("rewriting (1/2)")) {
+		t.Errorf("stderr missing rewrite progress: %s", stderrStr)
+	}
+	if !bytes.Contains(stderr.Bytes(), []byte("continuity: clean")) {
+		t.Errorf("stderr missing clean status: %s", stderrStr)
+	}
+}
+
+func TestExecuteBeatPipelineRewriteExhausted(t *testing.T) {
+	t.Parallel()
+
+	world := inspectionWorld()
+	bundle := bridgenarrative.AdaptWorld(world, bridgenarrative.Options{RecentEvents: 10})
+
+	gen := &beatFakeGenerator{responses: []string{
+		// 1: director plan
+		`{"beat_id":"beat_ex","objective":"Exhausted","target_node_id":"thread_open"}`,
+		// 2: writer draft
+		`{"id":"draft_v1","beat_id":"beat_ex","title":"Scene","kind":"scene","text":"Text."}`,
+		// 3: continuity → issue
+		`{"issues":[{"code":"RULE_VIOLATION","summary":"Problem."}]}`,
+		// 4: rewrite 1
+		`{"id":"draft_v2","beat_id":"beat_ex","title":"Scene v2","kind":"scene","text":"Still bad."}`,
+		// 5: continuity → still issue
+		`{"issues":[{"code":"RULE_VIOLATION","summary":"Still a problem."}]}`,
+		// 6: memory (proceeds despite issues)
+		`{"events":[{"id":"ev","beat_id":"beat_ex","type":"scene","summary":"S."}],"memories":[]}`,
+		// 7: state
+		`{"graph":{"current_node_id":"thread_open","nodes":[{"id":"thread_open","type":"mystery","status":"active","goal":"g"}]}}`,
+	}}
+
+	var stderr bytes.Buffer
+	result, err := executeBeatPipeline(context.Background(), gen, world, bundle, nil, 1, &stderr)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+
+	if len(result.Output.ContinuityIssues) != 1 {
+		t.Errorf("issues = %d, want 1 (exhausted rewrites)", len(result.Output.ContinuityIssues))
+	}
+	if result.Output.Draft.Title != "Scene v2" {
+		t.Errorf("draft = %q, want last rewrite", result.Output.Draft.Title)
+	}
+	if !bytes.Contains(stderr.Bytes(), []byte("remaining (proceeding)")) {
+		t.Errorf("stderr missing 'remaining' message: %s", stderr.String())
+	}
+}
+
+func TestRunBeatMultiStepAccumulatesResults(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	ctx := context.Background()
+	st := store.NewFileStore(workspace)
+
+	world := model.World{
+		ID: "w", Name: "W",
+		Threads: []model.WorldThread{
+			{ID: "t1", Kind: model.ThreadKindQuest, Title: "Quest", Status: model.ThreadStatusActive},
+		},
+	}
+	if err := st.SaveSnapshot(ctx, world); err != nil {
+		t.Fatalf("SaveSnapshot: %v", err)
+	}
+
+	beatResponses := func(beatID string) []string {
+		return []string{
+			fmt.Sprintf(`{"beat_id":"%s","objective":"Objective","target_node_id":"t1"}`, beatID),
+			fmt.Sprintf(`{"id":"draft_%s","beat_id":"%s","title":"Scene %s","kind":"scene","text":"Text."}`, beatID, beatID, beatID),
+			`{"issues":[]}`,
+			fmt.Sprintf(`{"events":[{"id":"ev_%s","beat_id":"%s","type":"scene","summary":"Sum."}],"memories":[]}`, beatID, beatID),
+			`{"graph":{"current_node_id":"t1","nodes":[{"id":"t1","type":"quest","status":"active","goal":"Quest"}]}}`,
+		}
+	}
+	allResponses := append(beatResponses("b1"), beatResponses("b2")...)
+	allResponses = append(allResponses, beatResponses("b3")...)
+
+	gen := &beatFakeGenerator{responses: allResponses}
+	genFactory := func(_, _ string) (engine.TextGenerator, error) { return gen, nil }
+
+	_ = genFactory
+
+	var stdout, stderr bytes.Buffer
+	bundle := bridgenarrative.AdaptWorld(world, bridgenarrative.Options{RecentEvents: 10})
+
+	results := make([]beatOutput, 0, 3)
+	for step := 0; step < 3; step++ {
+		w, err := st.LoadSnapshot(ctx, "w")
+		if err != nil {
+			t.Fatalf("LoadSnapshot step %d: %v", step, err)
+		}
+		bundle = bridgenarrative.AdaptWorld(w, bridgenarrative.Options{RecentEvents: 10})
+		result, pErr := executeBeatPipeline(ctx, gen, w, bundle, st, 0, &stderr)
+		if pErr != nil {
+			t.Fatalf("step %d: %v", step, pErr)
+		}
+		results = append(results, result.Output)
+	}
+
+	if len(results) != 3 {
+		t.Fatalf("results = %d, want 3", len(results))
+	}
+	if results[0].Plan.BeatID != "b1" {
+		t.Errorf("step 0 beat_id = %q", results[0].Plan.BeatID)
+	}
+	if results[2].Plan.BeatID != "b3" {
+		t.Errorf("step 2 beat_id = %q", results[2].Plan.BeatID)
+	}
+
+	final, err := st.LoadSnapshot(ctx, "w")
+	if err != nil {
+		t.Fatalf("LoadSnapshot final: %v", err)
+	}
+	if final.Clock.Sequence != 3 {
+		t.Errorf("final sequence = %d, want 3", final.Clock.Sequence)
+	}
+	if len(final.EventLog) < 6 {
+		t.Errorf("final events = %d, want >= 6 (2 per beat × 3)", len(final.EventLog))
+	}
+
+	data, _ := json.MarshalIndent(results, "", "  ")
+	stdout.Write(data)
+	var parsed []beatOutput
+	if err := json.Unmarshal(stdout.Bytes(), &parsed); err != nil {
+		t.Fatalf("unmarshal array: %v", err)
+	}
+	if len(parsed) != 3 {
+		t.Fatalf("parsed = %d, want 3", len(parsed))
+	}
+}
+
+func TestRunBeatStepsRequiresPositive(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{
+		"beat",
+		"--workspace", t.TempDir(),
+		"--world-id", "w",
+		"--steps", "0",
+	}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("expected exit 2, got %d", code)
 	}
 }
 

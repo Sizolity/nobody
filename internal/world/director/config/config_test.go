@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/sizolity/nobody/internal/world/director"
@@ -569,6 +571,132 @@ func TestLoadDirectorsLLMRejectsUnsupportedFormat(t *testing.T) {
 	_, err := LoadDirectors([]byte(data), LoadOptions{GeneratorFactory: factory})
 	if err == nil {
 		t.Fatal("expected error for unsupported template_format")
+	}
+}
+
+func TestLoadDirectorsFromFileJSON(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "directors.json")
+	data := []byte(`{
+  "directors": [
+    {"id": "script_1", "kind": "script", "events": [{"id": "ev_1", "type": "note", "source": "director"}]}
+  ]
+}`)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	dirs, err := LoadDirectorsFromFile(path)
+	if err != nil {
+		t.Fatalf("LoadDirectorsFromFile: %v", err)
+	}
+	if len(dirs) != 1 {
+		t.Fatalf("directors = %d, want 1", len(dirs))
+	}
+}
+
+func TestLoadDirectorsFromFileYAML(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "directors.yaml")
+	data := []byte(`directors:
+  - id: script_yaml
+    kind: script
+    events:
+      - id: ev_yaml
+        type: note
+        source: director
+`)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	dirs, err := LoadDirectorsFromFile(path)
+	if err != nil {
+		t.Fatalf("LoadDirectorsFromFile: %v", err)
+	}
+	if len(dirs) != 1 {
+		t.Fatalf("directors = %d, want 1", len(dirs))
+	}
+}
+
+func TestLoadDirectorsFromFileYMLExtension(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "directors.yml")
+	data := []byte(`directors:
+  - id: reconcile_yml
+    kind: reconcile
+    cases:
+      - event_id: ev_r
+        target_memory_id: mem_r
+`)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	dirs, err := LoadDirectorsFromFile(path)
+	if err != nil {
+		t.Fatalf("LoadDirectorsFromFile: %v", err)
+	}
+	if len(dirs) != 1 {
+		t.Fatalf("directors = %d, want 1", len(dirs))
+	}
+}
+
+func TestLoadDirectorsFromFileYAMLWithLLM(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "directors.yaml")
+	data := []byte(`directors:
+  - id: llm_yaml
+    kind: llm
+    provider: deepseek
+    system_prompt: "You are a test director."
+`)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	factory := func(provider, model string) (director.TextGenerator, error) {
+		return &stubGenerator{response: "[]"}, nil
+	}
+
+	dirs, err := LoadDirectorsFromFile(path, LoadOptions{GeneratorFactory: factory})
+	if err != nil {
+		t.Fatalf("LoadDirectorsFromFile: %v", err)
+	}
+	if len(dirs) != 1 {
+		t.Fatalf("directors = %d, want 1", len(dirs))
+	}
+}
+
+func TestLoadDirectorsFromFileInvalidYAML(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bad.yaml")
+	if err := os.WriteFile(path, []byte("directors:\n  - id: [unterminated"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadDirectorsFromFile(path)
+	if err == nil {
+		t.Fatal("expected error for invalid YAML")
+	}
+}
+
+func TestLoadDirectorsFromFileMissing(t *testing.T) {
+	t.Parallel()
+
+	_, err := LoadDirectorsFromFile("/nonexistent/path.json")
+	if err == nil {
+		t.Fatal("expected error for missing file")
 	}
 }
 

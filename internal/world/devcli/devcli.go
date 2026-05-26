@@ -176,7 +176,7 @@ func runStepConfig(ctx context.Context, args []string, stdout, stderr io.Writer)
 	fs := newFlagSet("step-config", stderr)
 	workspace := fs.String("workspace", "", "workspace directory")
 	worldID := fs.String("world-id", "", "world id")
-	configFile := fs.String("config-file", "", "director config JSON file")
+	configFile := fs.String("config-file", "", "director config file (JSON or YAML)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -184,12 +184,7 @@ func runStepConfig(ctx context.Context, args []string, stdout, stderr io.Writer)
 		fmt.Fprintln(stderr, "step-config requires --workspace, --world-id, and --config-file")
 		return 2
 	}
-	data, err := os.ReadFile(*configFile)
-	if err != nil {
-		fmt.Fprintf(stderr, "read director config failed: %v\n", err)
-		return 1
-	}
-	directors, err := directorconfig.LoadDirectors(data, directorconfig.LoadOptions{
+	directors, err := directorconfig.LoadDirectorsFromFile(*configFile, directorconfig.LoadOptions{
 		GeneratorFactory: cliGeneratorFactory,
 	})
 	if err != nil {
@@ -249,7 +244,7 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := newFlagSet("run", stderr)
 	workspace := fs.String("workspace", "", "workspace directory")
 	worldID := fs.String("world-id", "", "world id")
-	configFile := fs.String("config-file", "", "director config JSON file")
+	configFile := fs.String("config-file", "", "director config file (JSON or YAML)")
 	steps := fs.Int("steps", 1, "number of steps to execute")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -258,12 +253,7 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "run requires --workspace, --world-id, and --config-file")
 		return 2
 	}
-	data, err := os.ReadFile(*configFile)
-	if err != nil {
-		fmt.Fprintf(stderr, "read director config failed: %v\n", err)
-		return 1
-	}
-	directors, err := directorconfig.LoadDirectors(data, directorconfig.LoadOptions{
+	directors, err := directorconfig.LoadDirectorsFromFile(*configFile, directorconfig.LoadOptions{
 		GeneratorFactory: cliGeneratorFactory,
 	})
 	if err != nil {
@@ -521,9 +511,11 @@ func runBeat(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	worldID := fs.String("world-id", "", "world id")
 	provider := fs.String("provider", "deepseek", "LLM provider")
 	modelName := fs.String("model", "", "model name (default per provider)")
-	userInput := fs.String("input", "", "optional user input / prompt to steer the beat")
+	userInput := fs.String("input", "", "optional user input / prompt to steer the beat (first step only)")
 	recentEvents := fs.Int("recent-events", 20, "max recent world events included in context")
 	apply := fs.Bool("apply", false, "persist beat results back to world state")
+	steps := fs.Int("steps", 1, "number of consecutive beats to run (implies --apply when > 1)")
+	maxRewrites := fs.Int("max-rewrites", 2, "max continuity-driven rewrites per beat (0 to disable)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -531,19 +523,15 @@ func runBeat(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "beat requires --workspace and --world-id")
 		return 2
 	}
-
-	fs2 := store.NewFileStore(*workspace)
-	world, err := fs2.LoadSnapshot(ctx, *worldID)
-	if err != nil {
-		fmt.Fprintf(stderr, "load world: %v\n", err)
-		return 1
+	if *steps < 1 {
+		fmt.Fprintln(stderr, "beat --steps must be >= 1")
+		return 2
+	}
+	if *steps > 1 {
+		*apply = true
 	}
 
-	bundle := bridgenarrative.AdaptWorld(world, bridgenarrative.Options{
-		RecentEvents: *recentEvents,
-		UserInput:    *userInput,
-	})
-
+	fileStore := store.NewFileStore(*workspace)
 	gen, err := cliGeneratorFactory(*provider, *modelName)
 	if err != nil {
 		fmt.Fprintf(stderr, "create generator: %v\n", err)
@@ -552,16 +540,54 @@ func runBeat(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 
 	var applyStore beatApplyStore
 	if *apply {
-		applyStore = fs2
+		applyStore = fileStore
 	}
-	return executeBeatPipeline(ctx, gen, world, bundle, applyStore, stdout, stderr)
+
+	results := make([]beatOutput, 0, *steps)
+	for step := 0; step < *steps; step++ {
+		if *steps > 1 {
+			fmt.Fprintf(stderr, "\n=== beat %d/%d ===\n", step+1, *steps)
+		}
+
+		world, err := fileStore.LoadSnapshot(ctx, *worldID)
+		if err != nil {
+			fmt.Fprintf(stderr, "load world: %v\n", err)
+			return 1
+		}
+
+		input := ""
+		if step == 0 {
+			input = *userInput
+		}
+		bundle := bridgenarrative.AdaptWorld(world, bridgenarrative.Options{
+			RecentEvents: *recentEvents,
+			UserInput:    input,
+		})
+
+		result, err := executeBeatPipeline(ctx, gen, world, bundle, applyStore, *maxRewrites, stderr)
+		if err != nil {
+			fmt.Fprintf(stderr, "%v\n", err)
+			return 1
+		}
+		results = append(results, result.Output)
+	}
+
+	if len(results) == 1 {
+		return writeJSON(stdout, stderr, "encode beat output failed", results[0])
+	}
+	return writeJSON(stdout, stderr, "encode beat output failed", results)
 }
 
 type beatApplyStore interface {
 	SaveSnapshot(ctx context.Context, world model.World) error
 }
 
-func executeBeatPipeline(ctx context.Context, gen engine.TextGenerator, world model.World, bundle engine.ContextBundle, applyStore beatApplyStore, stdout, stderr io.Writer) int {
+type beatPipelineResult struct {
+	Output  beatOutput
+	Updated model.World
+}
+
+func executeBeatPipeline(ctx context.Context, gen engine.TextGenerator, world model.World, bundle engine.ContextBundle, applyStore beatApplyStore, maxRewrites int, stderr io.Writer) (beatPipelineResult, error) {
 	directorAgent := engine.NewLLMDirectorAgent(gen)
 	writerAgent := engine.NewLLMWriterAgent(gen)
 	continuityAgent := engine.NewLLMContinuityAgent(gen)
@@ -570,51 +596,61 @@ func executeBeatPipeline(ctx context.Context, gen engine.TextGenerator, world mo
 
 	plan, err := directorAgent.PlanBeat(ctx, bundle)
 	if err != nil {
-		fmt.Fprintf(stderr, "director plan: %v\n", err)
-		return 1
+		return beatPipelineResult{}, fmt.Errorf("director plan: %w", err)
 	}
 	fmt.Fprintf(stderr, "beat planned: %s → %s\n", plan.BeatID, plan.Objective)
 
 	draft, err := writerAgent.WriteBeat(ctx, bundle, plan)
 	if err != nil {
-		fmt.Fprintf(stderr, "writer draft: %v\n", err)
-		return 1
+		return beatPipelineResult{}, fmt.Errorf("writer draft: %w", err)
 	}
 	fmt.Fprintf(stderr, "draft written: %s (%s)\n", draft.Title, draft.Kind)
 
 	report, err := continuityAgent.Check(ctx, bundle, draft)
 	if err != nil {
-		fmt.Fprintf(stderr, "continuity check: %v\n", err)
-		return 1
+		return beatPipelineResult{}, fmt.Errorf("continuity check: %w", err)
 	}
+
+	for rewrite := 0; rewrite < maxRewrites && len(report.Issues) > 0; rewrite++ {
+		fmt.Fprintf(stderr, "continuity: %d issue(s), rewriting (%d/%d)\n", len(report.Issues), rewrite+1, maxRewrites)
+		draft, err = writerAgent.RewriteBeat(ctx, bundle, plan, draft, report.Issues)
+		if err != nil {
+			return beatPipelineResult{}, fmt.Errorf("rewrite %d: %w", rewrite+1, err)
+		}
+		fmt.Fprintf(stderr, "rewrite %d: %s (%s)\n", rewrite+1, draft.Title, draft.Kind)
+
+		report, err = continuityAgent.Check(ctx, bundle, draft)
+		if err != nil {
+			return beatPipelineResult{}, fmt.Errorf("continuity re-check %d: %w", rewrite+1, err)
+		}
+	}
+
 	if len(report.Issues) > 0 {
-		fmt.Fprintf(stderr, "continuity: %d issue(s) found\n", len(report.Issues))
+		fmt.Fprintf(stderr, "continuity: %d issue(s) remaining (proceeding)\n", len(report.Issues))
 	} else {
 		fmt.Fprintln(stderr, "continuity: clean")
 	}
 
 	memDelta, err := memoryAgent.Extract(ctx, bundle, draft)
 	if err != nil {
-		fmt.Fprintf(stderr, "memory extract: %v\n", err)
-		return 1
+		return beatPipelineResult{}, fmt.Errorf("memory extract: %w", err)
 	}
 	fmt.Fprintf(stderr, "memory: %d event(s), %d memory(ies)\n", len(memDelta.Events), len(memDelta.Memories))
 
 	stateDelta, err := stateAgent.Apply(ctx, bundle, plan, memDelta)
 	if err != nil {
-		fmt.Fprintf(stderr, "state update: %v\n", err)
-		return 1
+		return beatPipelineResult{}, fmt.Errorf("state update: %w", err)
 	}
 	fmt.Fprintf(stderr, "graph: %d node(s), current=%s\n", len(stateDelta.Graph.Nodes), stateDelta.Graph.CurrentNodeID)
 
+	updated := bridgenarrative.ApplyBeatResult(world, bridgenarrative.BeatResult{
+		Plan: plan, Draft: draft, Report: report,
+		MemDelta: memDelta, StateDelta: stateDelta,
+	})
+
 	if applyStore != nil {
-		updated := bridgenarrative.ApplyBeatResult(world, bridgenarrative.BeatResult{
-			Plan: plan, Draft: draft, Report: report,
-			MemDelta: memDelta, StateDelta: stateDelta,
-		})
 		if err := applyStore.SaveSnapshot(ctx, updated); err != nil {
-			fmt.Fprintf(stderr, "apply failed: %v\n", err)
-			return 1
+			return beatPipelineResult{}, fmt.Errorf("apply failed: %w", err)
 		}
 		fmt.Fprintf(stderr, "applied: world %s updated (sequence %d)\n", updated.ID, updated.Clock.Sequence)
 	}
@@ -632,15 +668,18 @@ func executeBeatPipeline(ctx context.Context, gen engine.TextGenerator, world mo
 		})
 	}
 
-	return writeJSON(stdout, stderr, "encode beat output failed", beatOutput{
-		WorldID:          string(world.ID),
-		Plan:             plan,
-		Draft:            beatOutputDraft{ID: draft.ID, Title: draft.Title, Kind: draft.Kind, Text: draft.Text},
-		ContinuityIssues: report.Issues,
-		Events:           events,
-		Memories:         memories,
-		Graph:            beatOutputGraph{CurrentNodeID: stateDelta.Graph.CurrentNodeID, NodeCount: len(stateDelta.Graph.Nodes)},
-	})
+	return beatPipelineResult{
+		Output: beatOutput{
+			WorldID:          string(world.ID),
+			Plan:             plan,
+			Draft:            beatOutputDraft{ID: draft.ID, Title: draft.Title, Kind: draft.Kind, Text: draft.Text},
+			ContinuityIssues: report.Issues,
+			Events:           events,
+			Memories:         memories,
+			Graph:            beatOutputGraph{CurrentNodeID: stateDelta.Graph.CurrentNodeID, NodeCount: len(stateDelta.Graph.Nodes)},
+		},
+		Updated: updated,
+	}, nil
 }
 
 func writeJSON(stdout, stderr io.Writer, message string, v any) int {

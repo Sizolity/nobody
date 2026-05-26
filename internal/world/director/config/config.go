@@ -5,8 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/cloudwego/eino/schema"
+	"gopkg.in/yaml.v3"
 
 	"github.com/sizolity/nobody/internal/world/director"
 	"github.com/sizolity/nobody/internal/world/model"
@@ -51,6 +55,31 @@ type LoadOptions struct {
 	// It receives the provider and model from the JSON config and returns
 	// the corresponding TextGenerator.
 	GeneratorFactory GeneratorFactory
+}
+
+// LoadDirectorsFromFile loads directors from a JSON or YAML file. The format
+// is auto-detected by file extension (.yaml, .yml → YAML; otherwise JSON).
+func LoadDirectorsFromFile(path string, opts ...LoadOptions) ([]director.Director, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	ext := strings.ToLower(filepath.Ext(path))
+	if ext == ".yaml" || ext == ".yml" {
+		data, err = yamlToJSON(data)
+		if err != nil {
+			return nil, fmt.Errorf("yaml conversion: %w", err)
+		}
+	}
+	return LoadDirectors(data, opts...)
+}
+
+func yamlToJSON(data []byte) ([]byte, error) {
+	var generic any
+	if err := yaml.Unmarshal(data, &generic); err != nil {
+		return nil, err
+	}
+	return json.Marshal(generic)
 }
 
 func LoadDirectors(data []byte, opts ...LoadOptions) ([]director.Director, error) {

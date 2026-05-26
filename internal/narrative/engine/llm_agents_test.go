@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/sizolity/nobody/internal/narrative"
@@ -133,6 +134,79 @@ func TestLLMWriterAgentPropagatesError(t *testing.T) {
 	agent := NewLLMWriterAgent(gen)
 
 	_, err := agent.WriteBeat(context.Background(), ContextBundle{}, BeatPlan{})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestLLMWriterAgentRewriteFixesDraft(t *testing.T) {
+	t.Parallel()
+
+	revised := narrative.Draft{
+		ID: "draft_rev", BeatID: "beat_x", Title: "Fixed Scene",
+		Kind: "scene", Text: "The revised text.",
+	}
+	revisedJSON, _ := json.Marshal(revised)
+
+	gen := &fakeTextGenerator{response: string(revisedJSON)}
+	agent := NewLLMWriterAgent(gen)
+
+	original := narrative.Draft{
+		ID: "draft_1", BeatID: "beat_x", Title: "Broken Scene",
+		Kind: "scene", Text: "Bob is in the tower.",
+	}
+	issues := []ContinuityIssue{{Code: "LOCATION_MISMATCH", Summary: "Bob should be at market."}}
+
+	got, err := agent.RewriteBeat(context.Background(), ContextBundle{
+		World: narrative.World{ID: "w", Title: "T"},
+	}, BeatPlan{BeatID: "beat_x"}, original, issues)
+	if err != nil {
+		t.Fatalf("RewriteBeat error: %v", err)
+	}
+	if got.ID != "draft_rev" {
+		t.Errorf("ID = %q", got.ID)
+	}
+	if got.BeatID != "beat_x" {
+		t.Errorf("BeatID = %q", got.BeatID)
+	}
+	if got.Title != "Fixed Scene" {
+		t.Errorf("Title = %q", got.Title)
+	}
+}
+
+func TestLLMWriterAgentRewriteIncludesIssuesInPrompt(t *testing.T) {
+	t.Parallel()
+
+	gen := &capturingTextGenerator{
+		response: `{"id":"d","beat_id":"b","title":"T","kind":"scene","text":"x"}`,
+	}
+	agent := NewLLMWriterAgent(gen)
+
+	issues := []ContinuityIssue{
+		{Code: "RULE_VIOLATION", Summary: "Magic at night is forbidden."},
+	}
+	agent.RewriteBeat(context.Background(), ContextBundle{
+		World: narrative.World{ID: "w", Title: "T"},
+	}, BeatPlan{BeatID: "b"}, narrative.Draft{}, issues)
+
+	if gen.lastUser == "" {
+		t.Fatal("user prompt should not be empty")
+	}
+	if !strings.Contains(gen.lastUser, "RULE_VIOLATION") {
+		t.Error("user prompt should contain the issue code")
+	}
+	if !strings.Contains(gen.lastUser, "Magic at night") {
+		t.Error("user prompt should contain the issue summary")
+	}
+}
+
+func TestLLMWriterAgentRewritePropagatesError(t *testing.T) {
+	t.Parallel()
+
+	gen := &fakeTextGenerator{err: fmt.Errorf("down")}
+	agent := NewLLMWriterAgent(gen)
+
+	_, err := agent.RewriteBeat(context.Background(), ContextBundle{}, BeatPlan{}, narrative.Draft{}, []ContinuityIssue{})
 	if err == nil {
 		t.Fatal("expected error")
 	}

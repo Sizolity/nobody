@@ -251,8 +251,8 @@ func populatedWorld() model.World {
 		EventLog: []model.WorldEvent{
 			{ID: "evt_1", Type: model.EventTypeNote, Source: model.EventSourceDirector, Description: "Session start."},
 		},
-		EventQueue: []model.EventQueueItem{
-			{Event: model.WorldEvent{ID: "evt_queued", Type: model.EventTypeNote, Source: model.EventSourceDirector, Description: "Queued."}},
+		EventQueue: []model.WorldEvent{
+			{ID: "evt_queued", Type: model.EventTypeNote, Source: model.EventSourceDirector, Description: "Queued."},
 		},
 	}
 }
