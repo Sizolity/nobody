@@ -16,6 +16,8 @@ type WorldEvent struct {
 
 const (
 	EventTypeNote                = "note"
+	EventTypeMove                = "move"
+	EventTypeInventoryChanged    = "inventory_changed"
 	EventTypeWorldFactChanged    = "world_fact_changed"
 	EventTypeRelationshipChanged = "relationship_changed"
 	EventTypeRemember            = "remember"
@@ -54,16 +56,17 @@ type Effect struct {
 }
 
 const (
-	EffectSetFact           = "set_fact"
-	EffectUpdateEntityState = "update_entity_state"
-	EffectAddRelation       = "add_relation"
-	EffectAddMemory         = "add_memory"
-	EffectReviseMemory      = "revise_memory"
-	EffectReconcileMemory   = "reconcile_memory"
-	EffectEnqueueEvent      = "enqueue_event"
-	EffectOpenThread        = "open_thread"
-	EffectUpdateThread      = "update_thread"
-	EffectCloseThread       = "close_thread"
+	EffectSetFact            = "set_fact"
+	EffectUpdateEntityState  = "update_entity_state"
+	EffectSetEntityComponent = "set_entity_component"
+	EffectAddRelation        = "add_relation"
+	EffectAddMemory          = "add_memory"
+	EffectReviseMemory       = "revise_memory"
+	EffectReconcileMemory    = "reconcile_memory"
+	EffectEnqueueEvent       = "enqueue_event"
+	EffectOpenThread         = "open_thread"
+	EffectUpdateThread       = "update_thread"
+	EffectCloseThread        = "close_thread"
 )
 
 func (e Effect) Validate() error {
@@ -71,7 +74,7 @@ func (e Effect) Validate() error {
 		return fmt.Errorf("effect.kind is required")
 	}
 	switch e.Kind {
-	case EffectSetFact, EffectUpdateEntityState, EffectAddRelation, EffectAddMemory, EffectReviseMemory, EffectReconcileMemory, EffectEnqueueEvent, EffectOpenThread, EffectUpdateThread, EffectCloseThread:
+	case EffectSetFact, EffectUpdateEntityState, EffectSetEntityComponent, EffectAddRelation, EffectAddMemory, EffectReviseMemory, EffectReconcileMemory, EffectEnqueueEvent, EffectOpenThread, EffectUpdateThread, EffectCloseThread:
 	default:
 		return fmt.Errorf("unsupported effect kind %q", e.Kind)
 	}

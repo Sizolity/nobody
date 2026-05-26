@@ -67,6 +67,25 @@ func TestWorldEventValidateAcceptsSupportedEffects(t *testing.T) {
 	}
 }
 
+func TestWorldEventValidateAcceptsSetEntityComponentEffect(t *testing.T) {
+	event := WorldEvent{
+		ID:     "event_1",
+		Type:   EventTypeNote,
+		Source: EventSourceTest,
+		Effects: []Effect{{
+			Kind:     EffectSetEntityComponent,
+			TargetID: "char_alice",
+			Payload: map[string]Value{
+				"component": {Kind: ValueKindString, Raw: ComponentSpatial},
+				"data":      {Kind: ValueKindObject, Raw: NewSpatialComponent("tower")},
+			},
+		}},
+	}
+	if err := event.Validate(); err != nil {
+		t.Fatalf("Validate returned error: %v", err)
+	}
+}
+
 func TestEffectValidateRejectsUnsupportedKind(t *testing.T) {
 	effect := Effect{Kind: "unsupported", TargetID: "target_1"}
 	if err := effect.Validate(); err == nil {

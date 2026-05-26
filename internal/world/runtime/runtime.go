@@ -208,6 +208,8 @@ func cloneAny(value any) any {
 		return out
 	case map[string]int:
 		return cloneIntMap(typed)
+	case map[string]model.Value:
+		return cloneValueMap(typed)
 	case []any:
 		out := make([]any, len(typed))
 		for i, item := range typed {
@@ -283,6 +285,8 @@ func applyEffect(world model.World, effect model.Effect) (model.World, error) {
 		return applySetFact(world, effect)
 	case model.EffectUpdateEntityState:
 		return applyUpdateEntityState(world, effect)
+	case model.EffectSetEntityComponent:
+		return applySetEntityComponent(world, effect)
 	case model.EffectAddRelation:
 		return applyAddRelation(world, effect)
 	case model.EffectAddMemory:
@@ -337,6 +341,34 @@ func applyUpdateEntityState(world model.World, effect model.Effect) (model.World
 	}
 	for key, value := range effect.Payload {
 		entity.State[key] = value
+	}
+	if world.Entities == nil {
+		world.Entities = map[model.EntityID]model.Entity{}
+	}
+	world.Entities[entityID] = entity
+	return world, nil
+}
+
+func applySetEntityComponent(world model.World, effect model.Effect) (model.World, error) {
+	entityID := model.EntityID(effect.TargetID)
+	entity, ok := world.Entities[entityID]
+	if !ok {
+		return model.World{}, fmt.Errorf("entity %q not found", effect.TargetID)
+	}
+	component, err := payloadString(effect, "component")
+	if err != nil {
+		return model.World{}, err
+	}
+	data, err := payloadObject(effect, "data")
+	if err != nil {
+		return model.World{}, err
+	}
+	if entity.Components == nil {
+		entity.Components = map[string]any{}
+	}
+	entity.Components[component] = data
+	if err := entity.Validate(); err != nil {
+		return model.World{}, err
 	}
 	if world.Entities == nil {
 		world.Entities = map[model.EntityID]model.Entity{}
@@ -627,6 +659,18 @@ func payloadString(effect model.Effect, key string) (string, error) {
 		return "", fmt.Errorf("payload.%s must be a non-empty string", key)
 	}
 	return raw, nil
+}
+
+func payloadObject(effect model.Effect, key string) (map[string]any, error) {
+	value, ok := effect.Payload[key]
+	if !ok {
+		return nil, fmt.Errorf("payload.%s is required", key)
+	}
+	raw, ok := value.Raw.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("payload.%s must be an object", key)
+	}
+	return cloneAnyMap(raw), nil
 }
 
 func payloadOptionalString(effect model.Effect, key string) string {

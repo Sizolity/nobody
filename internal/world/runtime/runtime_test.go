@@ -96,6 +96,87 @@ func TestRuntimeAppliesUpdateEntityStateEffect(t *testing.T) {
 	}
 }
 
+func TestRuntimeAppliesSetEntityComponentEffect(t *testing.T) {
+	t.Parallel()
+
+	rt := Runtime{}
+	world := model.World{
+		ID:   "test_world",
+		Name: "Test World",
+		Entities: map[model.EntityID]model.Entity{
+			"char_alice": {
+				ID:   "char_alice",
+				Type: "character",
+				Name: "Alice",
+				Components: map[string]any{
+					model.ComponentSpatial: model.NewSpatialComponent("hall"),
+				},
+			},
+		},
+	}
+	event := model.WorldEvent{
+		ID:     "event_1",
+		Type:   model.EventTypeNote,
+		Source: model.EventSourceTest,
+		Effects: []model.Effect{{
+			Kind:     model.EffectSetEntityComponent,
+			TargetID: "char_alice",
+			Payload: map[string]model.Value{
+				"component": {Kind: model.ValueKindString, Raw: model.ComponentSpatial},
+				"data":      {Kind: model.ValueKindObject, Raw: model.NewSpatialComponent("tower")},
+			},
+		}},
+	}
+
+	got, err := rt.ApplyEvent(world, event)
+	if err != nil {
+		t.Fatalf("ApplyEvent returned error: %v", err)
+	}
+	spatial, ok := got.Entities["char_alice"].SpatialComponent()
+	if !ok {
+		t.Fatalf("spatial component missing: %#v", got.Entities["char_alice"].Components)
+	}
+	if spatial.LocationID != "tower" {
+		t.Fatalf("location id = %q, want tower", spatial.LocationID)
+	}
+	if world.Entities["char_alice"].Components[model.ComponentSpatial].(map[string]any)["location_id"] != "hall" {
+		t.Fatalf("input world was mutated: %#v", world.Entities["char_alice"].Components)
+	}
+}
+
+func TestRuntimeRejectsInvalidSetEntityComponentEffect(t *testing.T) {
+	t.Parallel()
+
+	rt := Runtime{}
+	world := model.World{
+		ID:   "test_world",
+		Name: "Test World",
+		Entities: map[model.EntityID]model.Entity{
+			"char_alice": {ID: "char_alice", Type: "character", Name: "Alice"},
+		},
+	}
+	event := model.WorldEvent{
+		ID:     "event_1",
+		Type:   model.EventTypeNote,
+		Source: model.EventSourceTest,
+		Effects: []model.Effect{{
+			Kind:     model.EffectSetEntityComponent,
+			TargetID: "char_alice",
+			Payload: map[string]model.Value{
+				"component": {Kind: model.ValueKindString, Raw: model.ComponentSpatial},
+				"data":      {Kind: model.ValueKindObject, Raw: map[string]any{"location_id": "../bad"}},
+			},
+		}},
+	}
+
+	if _, err := rt.ApplyEvent(world, event); err == nil {
+		t.Fatal("ApplyEvent returned nil for invalid component")
+	}
+	if _, ok := world.Entities["char_alice"].Components[model.ComponentSpatial]; ok {
+		t.Fatalf("input world was mutated: %#v", world.Entities["char_alice"].Components)
+	}
+}
+
 func TestRuntimeAppliesAddRelationEffect(t *testing.T) {
 	rt := Runtime{}
 	world := model.World{ID: "test_world", Name: "Test World"}
