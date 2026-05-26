@@ -1,4 +1,4 @@
-package narrative
+package bridge
 
 import (
 	"testing"

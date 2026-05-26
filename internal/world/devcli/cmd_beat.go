@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	bridgenarrative "github.com/sizolity/nobody/internal/bridge/narrative"
+	rpgbridge "github.com/sizolity/nobody/rpg/bridge"
 	"github.com/sizolity/nobody/internal/narrative/engine"
 	"github.com/sizolity/nobody/internal/world/director"
 	"github.com/sizolity/nobody/internal/world/model"
@@ -112,7 +112,7 @@ func runBridgeContext(ctx context.Context, args []string, stdout, stderr io.Writ
 		fmt.Fprintf(stderr, "bridge-context failed: %v\n", err)
 		return 1
 	}
-	bundle := bridgenarrative.AdaptWorld(world, bridgenarrative.Options{
+	bundle := rpgbridge.AdaptWorld(world, rpgbridge.Options{
 		RecentEvents: *recentEvents,
 		UserInput:    *userInput,
 	})
@@ -345,14 +345,14 @@ func runBeat(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		if step == 0 {
 			input = *userInput
 		}
-		adaptOpts := bridgenarrative.Options{
+		adaptOpts := rpgbridge.Options{
 			RecentEvents: *recentEvents,
 			UserInput:    input,
 		}
 		if *maxMemories > 0 {
 			adaptOpts.MemoryFilter = &store.MemoryFilter{MaxCount: *maxMemories}
 		}
-		bundle := bridgenarrative.AdaptWorld(world, adaptOpts)
+		bundle := rpgbridge.AdaptWorld(world, adaptOpts)
 
 		result, err := executeBeatPipelineWithHook(ctx, gen, world, bundle, beatPipelineOpts{
 			applyStore: applyStore, maxRewrites: *maxRewrites, hook: hook, planOnly: *planOnly,
@@ -557,7 +557,7 @@ func executeBeatPipelineWithHook(ctx context.Context, gen engine.TextGenerator, 
 	}
 	fmt.Fprintf(stderr, "graph: %d node(s), current=%s\n", len(stateDelta.Graph.Nodes), stateDelta.Graph.CurrentNodeID)
 
-	updated := bridgenarrative.ApplyBeatResult(world, bridgenarrative.BeatResult{
+	updated := rpgbridge.ApplyBeatResult(world, rpgbridge.BeatResult{
 		Plan: plan, Draft: draft, Report: report,
 		MemDelta: memDelta, StateDelta: stateDelta,
 	})

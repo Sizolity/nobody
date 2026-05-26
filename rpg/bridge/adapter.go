@@ -1,7 +1,7 @@
-// Package narrative bridges the world runtime layer and the narrative
+// Package bridge bridges the world runtime layer and the narrative
 // engine layer by converting world state into narrative ContextBundle
 // values.
-package narrative
+package bridge
 
 import (
 	"math"
@@ -13,6 +13,7 @@ import (
 	"github.com/sizolity/nobody/internal/narrative/engine"
 	"github.com/sizolity/nobody/internal/world/model"
 	"github.com/sizolity/nobody/internal/world/store"
+	rpgrule "github.com/sizolity/nobody/rpg/rule"
 )
 
 type Options struct {
@@ -28,7 +29,7 @@ func AdaptWorld(w model.World, opts Options) engine.ContextBundle {
 	if opts.MemoryFilter != nil {
 		memories = opts.MemoryFilter.Filter(memories)
 	}
-	return engine.ContextBundle{
+	bundle := engine.ContextBundle{
 		World:      adaptCanon(w),
 		Graph:      adaptThreads(w.Threads),
 		Characters: adaptCharacters(w.Entities),
@@ -37,6 +38,14 @@ func AdaptWorld(w model.World, opts Options) engine.ContextBundle {
 		Memories:   adaptMemories(memories),
 		Input:      opts.UserInput,
 	}
+
+	if rpgRules := rpgrule.FromWorldRules(w.Rules); len(rpgRules) > 0 {
+		if section := rpgrule.AssemblePromptSection(rpgRules); section != "" {
+			bundle.World.Rules = append(bundle.World.Rules, section)
+		}
+	}
+
+	return bundle
 }
 
 func adaptCanon(w model.World) narr.World {
@@ -109,13 +118,23 @@ func adaptEvents(events []model.WorldEvent, limit int) []narr.NarrativeEvent {
 		}
 		out = append(out, narr.NarrativeEvent{
 			ID:             string(e.ID),
-			BeatID:         "world",
+			BeatID:         extractBeatID(e),
 			Type:           e.Type,
 			Summary:        summary,
 			ParticipantIDs: participants,
 		})
 	}
 	return out
+}
+
+func extractBeatID(e model.WorldEvent) string {
+	if strings.HasPrefix(string(e.ID), "beat_") {
+		return string(e.ID)
+	}
+	if e.Source == model.EventSourceDirector {
+		return "director"
+	}
+	return "world"
 }
 
 func adaptMemories(memories []model.MemoryRecord) []narr.Memory {
@@ -159,10 +178,12 @@ func adaptThreads(threads []model.WorldThread) narr.StoryGraph {
 			continue
 		}
 		nodes = append(nodes, narr.StoryNode{
-			ID:     string(th.ID),
-			Type:   th.Kind,
-			Status: mapThreadStatus(th.Status),
-			Goal:   th.Title,
+			ID:           string(th.ID),
+			Type:         th.Kind,
+			Status:       mapThreadStatus(th.Status),
+			Goal:         th.Title,
+			CharacterIDs: entityIDsToStrings(th.ParticipantIDs),
+			LocationID:   string(th.LocationID),
 		})
 		if currentID == "" || th.Status == model.ThreadStatusActive {
 			currentID = string(th.ID)
@@ -172,6 +193,17 @@ func adaptThreads(threads []model.WorldThread) narr.StoryGraph {
 		CurrentNodeID: currentID,
 		Nodes:         nodes,
 	}
+}
+
+func entityIDsToStrings(ids []model.EntityID) []string {
+	if len(ids) == 0 {
+		return nil
+	}
+	out := make([]string, len(ids))
+	for i, id := range ids {
+		out[i] = string(id)
+	}
+	return out
 }
 
 func isTerminalThreadStatus(status string) bool {

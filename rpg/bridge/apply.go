@@ -1,4 +1,4 @@
-package narrative
+package bridge
 
 import (
 	narr "github.com/sizolity/nobody/internal/narrative"
@@ -117,16 +117,10 @@ func mapNarrativeMemoryScope(nt string) string {
 }
 
 func mapNarrativeMemoryKind(nt string) string {
-	switch nt {
-	case "observation":
-		return model.MemoryKindObservation
-	case "belief", "secret":
-		return model.MemoryKindBelief
-	case "emotion", "relationship":
-		return model.MemoryKindObservation
-	default:
+	if nt == "" {
 		return model.MemoryKindObservation
 	}
+	return nt
 }
 
 func reconcileThreads(threads []model.WorldThread, graph narr.StoryGraph) []model.WorldThread {

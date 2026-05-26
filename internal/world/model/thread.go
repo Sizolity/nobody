@@ -3,13 +3,15 @@ package model
 import "fmt"
 
 type WorldThread struct {
-	ID       ThreadID `json:"id"`
-	Kind     string   `json:"kind"`
-	Title    string   `json:"title"`
-	Summary  string   `json:"summary,omitempty"`
-	Status   string   `json:"status"`
-	Priority float64  `json:"priority,omitempty"`
-	Tension  float64  `json:"tension,omitempty"`
+	ID             ThreadID   `json:"id"`
+	Kind           string     `json:"kind"`
+	Title          string     `json:"title"`
+	Summary        string     `json:"summary,omitempty"`
+	Status         string     `json:"status"`
+	Priority       float64    `json:"priority,omitempty"`
+	Tension        float64    `json:"tension,omitempty"`
+	ParticipantIDs []EntityID `json:"participant_ids,omitempty"`
+	LocationID     EntityID   `json:"location_id,omitempty"`
 }
 
 const (

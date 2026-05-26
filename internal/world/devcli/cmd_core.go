@@ -13,6 +13,7 @@ import (
 	"github.com/sizolity/nobody/internal/world/runner"
 	worldruntime "github.com/sizolity/nobody/internal/world/runtime"
 	"github.com/sizolity/nobody/internal/world/store"
+	rpgtemplate "github.com/sizolity/nobody/rpg/template"
 )
 
 func runInit(ctx context.Context, args []string, stdout, stderr io.Writer) int {
@@ -20,7 +21,7 @@ func runInit(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	workspace := fs.String("workspace", "", "workspace directory")
 	worldID := fs.String("world-id", "", "world id")
 	name := fs.String("name", "", "world name")
-	template := fs.String("template", "", "world template ("+strings.Join(store.TemplateNames(), ", ")+")")
+	template := fs.String("template", "", "world template ("+strings.Join(rpgtemplate.TemplateNames(), ", ")+")")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -31,9 +32,9 @@ func runInit(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 
 	var world model.World
 	if *template != "" {
-		tmpl, ok := store.Templates[*template]
+		tmpl, ok := rpgtemplate.Templates[*template]
 		if !ok {
-			fmt.Fprintf(stderr, "unknown template %q (available: %s)\n", *template, strings.Join(store.TemplateNames(), ", "))
+			fmt.Fprintf(stderr, "unknown template %q (available: %s)\n", *template, strings.Join(rpgtemplate.TemplateNames(), ", "))
 			return 2
 		}
 		var err error

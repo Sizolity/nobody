@@ -246,7 +246,7 @@ func populatedWorld() model.World {
 			{ID: "thread_1", Kind: model.ThreadKindMystery, Title: "Who poisoned the well?", Status: model.ThreadStatusOpen},
 		},
 		Rules: []model.Rule{
-			{ID: "rule_1", Name: "No dead actors", Kind: "system", Enabled: true},
+			{ID: "rule_1", Kind: "system", Enabled: true},
 		},
 		EventLog: []model.WorldEvent{
 			{ID: "evt_1", Type: model.EventTypeNote, Source: model.EventSourceDirector, Description: "Session start."},

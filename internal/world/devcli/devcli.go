@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/sizolity/nobody/internal/world/director"
+	rpgcli "github.com/sizolity/nobody/rpg/cli"
 )
 
 func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
@@ -79,6 +80,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runManageRelation(ctx, args[1:], stdout, stderr)
 	case "manage-fact":
 		return runManageFact(ctx, args[1:], stdout, stderr)
+	case "manage-rule":
+		return rpgcli.RunManageRule(ctx, args[1:], stdout, stderr)
 	case "manage-queue":
 		return runManageQueue(ctx, args[1:], stdout, stderr)
 	case "beat":

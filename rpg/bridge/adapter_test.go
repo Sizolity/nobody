@@ -1,4 +1,4 @@
-package narrative
+package bridge
 
 import (
 	"strings"
@@ -328,5 +328,88 @@ func TestAdaptWorldNilMemoryFilterIncludesAll(t *testing.T) {
 	got := AdaptWorld(w, Options{})
 	if len(got.Memories) != 2 {
 		t.Fatalf("Memories = %d, want 2 (nil filter = include all)", len(got.Memories))
+	}
+}
+
+func TestAdaptMemoriesPreservesKind(t *testing.T) {
+	t.Parallel()
+
+	memories := []model.MemoryRecord{
+		{ID: "m1", Owner: model.MemoryOwner{Kind: "character", ID: "c1"}, Kind: "emotion", Content: "feels sad", Importance: 0.5},
+		{ID: "m2", Owner: model.MemoryOwner{Kind: "character", ID: "c1"}, Kind: "belief", Content: "trusts nobody", Importance: 0.5},
+		{ID: "m3", Owner: model.MemoryOwner{Kind: "character", ID: "c1"}, Kind: "secret", Content: "hidden power", Importance: 0.5},
+		{ID: "m4", Owner: model.MemoryOwner{Kind: "character", ID: "c1"}, Kind: "observation", Content: "saw a bird", Importance: 0.5},
+		{ID: "m5", Owner: model.MemoryOwner{Kind: "character", ID: "c1"}, Kind: "relationship", Content: "allied with Bob", Importance: 0.5},
+	}
+	result := adaptMemories(memories)
+	expected := []string{"emotion", "belief", "secret", "observation", "relationship"}
+	for i, m := range result {
+		if m.Type != expected[i] {
+			t.Errorf("memory %d: expected type %q, got %q", i, expected[i], m.Type)
+		}
+	}
+}
+
+func TestAdaptThreadsIncludesParticipantsAndLocation(t *testing.T) {
+	t.Parallel()
+
+	threads := []model.WorldThread{
+		{
+			ID:             "thread_1",
+			Kind:           model.ThreadKindQuest,
+			Title:          "Save the village",
+			Status:         model.ThreadStatusActive,
+			ParticipantIDs: []model.EntityID{"char_hero", "char_sage"},
+			LocationID:     "loc_village",
+		},
+		{
+			ID:     "thread_2",
+			Kind:   model.ThreadKindMystery,
+			Title:  "Who stole the gem",
+			Status: model.ThreadStatusOpen,
+		},
+	}
+	graph := adaptThreads(threads)
+	if len(graph.Nodes) != 2 {
+		t.Fatalf("expected 2 nodes, got %d", len(graph.Nodes))
+	}
+
+	node := graph.Nodes[0]
+	if len(node.CharacterIDs) != 2 {
+		t.Errorf("expected 2 character IDs, got %d", len(node.CharacterIDs))
+	}
+	if node.CharacterIDs[0] != "char_hero" || node.CharacterIDs[1] != "char_sage" {
+		t.Errorf("unexpected CharacterIDs: %v", node.CharacterIDs)
+	}
+	if node.LocationID != "loc_village" {
+		t.Errorf("expected location 'loc_village', got %q", node.LocationID)
+	}
+
+	node2 := graph.Nodes[1]
+	if node2.CharacterIDs != nil {
+		t.Errorf("expected nil CharacterIDs for thread without participants, got %v", node2.CharacterIDs)
+	}
+	if node2.LocationID != "" {
+		t.Errorf("expected empty LocationID for thread without location, got %q", node2.LocationID)
+	}
+}
+
+func TestAdaptEventsExtractsBeatID(t *testing.T) {
+	t.Parallel()
+
+	events := []model.WorldEvent{
+		{ID: "beat_abc123", Type: "note", Source: model.EventSourceDirector, Description: "scene"},
+		{ID: "event_xyz", Type: "note", Source: model.EventSourceDirector, Description: "action"},
+		{ID: "manual_1", Type: "note", Source: model.EventSourceUser, Description: "user event"},
+	}
+	result := adaptEvents(events, 10)
+	if result[0].BeatID != "beat_abc123" {
+		t.Errorf("beat event: expected BeatID 'beat_abc123', got %q", result[0].BeatID)
+	}
+	if result[1].BeatID != "director" {
+		t.Errorf("director event: expected BeatID 'director', got %q", result[1].BeatID)
+	}
+	if result[2].BeatID != "world" {
+		t.Errorf("user event: expected BeatID 'world', got %q", result[2].BeatID)
 	}
 }

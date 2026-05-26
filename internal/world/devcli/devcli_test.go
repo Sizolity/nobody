@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	bridgenarrative "github.com/sizolity/nobody/internal/bridge/narrative"
+	rpgbridge "github.com/sizolity/nobody/rpg/bridge"
 	"github.com/sizolity/nobody/internal/narrative/engine"
 	"github.com/sizolity/nobody/internal/world/director"
 	"github.com/sizolity/nobody/internal/world/model"
@@ -1119,7 +1119,7 @@ func TestExecuteBeatPipelineReturnsOutput(t *testing.T) {
 	t.Parallel()
 
 	world := inspectionWorld()
-	bundle := bridgenarrative.AdaptWorld(world, bridgenarrative.Options{RecentEvents: 10})
+	bundle := rpgbridge.AdaptWorld(world, rpgbridge.Options{RecentEvents: 10})
 
 	gen := &beatFakeGenerator{responses: []string{
 		`{"beat_id":"beat_test","objective":"Test beat","target_node_id":"thread_open"}`,
@@ -1184,7 +1184,7 @@ func TestExecuteBeatPipelineDirectorError(t *testing.T) {
 	t.Parallel()
 
 	world := inspectionWorld()
-	bundle := bridgenarrative.AdaptWorld(world, bridgenarrative.Options{RecentEvents: 10})
+	bundle := rpgbridge.AdaptWorld(world, rpgbridge.Options{RecentEvents: 10})
 
 	gen := &beatFakeGenerator{responses: []string{`not json`}}
 
@@ -1215,7 +1215,7 @@ func TestExecuteBeatPipelineApplyPersistsToWorld(t *testing.T) {
 		t.Fatalf("SaveSnapshot: %v", err)
 	}
 
-	bundle := bridgenarrative.AdaptWorld(world, bridgenarrative.Options{RecentEvents: 10})
+	bundle := rpgbridge.AdaptWorld(world, rpgbridge.Options{RecentEvents: 10})
 	gen := &beatFakeGenerator{responses: []string{
 		`{"beat_id":"beat_apply","objective":"Test apply","target_node_id":"t1"}`,
 		`{"id":"draft_1","beat_id":"beat_apply","title":"Applied Scene","kind":"scene","text":"Something happened."}`,
@@ -1256,7 +1256,7 @@ func TestExecuteBeatPipelineRewritesOnContinuityIssues(t *testing.T) {
 	t.Parallel()
 
 	world := inspectionWorld()
-	bundle := bridgenarrative.AdaptWorld(world, bridgenarrative.Options{RecentEvents: 10})
+	bundle := rpgbridge.AdaptWorld(world, rpgbridge.Options{RecentEvents: 10})
 
 	gen := &beatFakeGenerator{responses: []string{
 		// 1: director plan
@@ -1301,7 +1301,7 @@ func TestExecuteBeatPipelineRewriteExhausted(t *testing.T) {
 	t.Parallel()
 
 	world := inspectionWorld()
-	bundle := bridgenarrative.AdaptWorld(world, bridgenarrative.Options{RecentEvents: 10})
+	bundle := rpgbridge.AdaptWorld(world, rpgbridge.Options{RecentEvents: 10})
 
 	gen := &beatFakeGenerator{responses: []string{
 		// 1: director plan
@@ -1354,7 +1354,7 @@ func TestExecuteBeatPipelineCriticalBlocksApply(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	bundle := bridgenarrative.AdaptWorld(world, bridgenarrative.Options{RecentEvents: 10})
+	bundle := rpgbridge.AdaptWorld(world, rpgbridge.Options{RecentEvents: 10})
 	gen := &beatFakeGenerator{responses: []string{
 		`{"beat_id":"beat_crit","objective":"Critical test","target_node_id":"t1"}`,
 		`{"id":"draft_1","beat_id":"beat_crit","title":"Scene","kind":"scene","text":"Text."}`,
@@ -1388,7 +1388,7 @@ func TestExecuteBeatPipelineWarningAllowsApply(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	bundle := bridgenarrative.AdaptWorld(world, bridgenarrative.Options{RecentEvents: 10})
+	bundle := rpgbridge.AdaptWorld(world, rpgbridge.Options{RecentEvents: 10})
 	gen := &beatFakeGenerator{responses: []string{
 		`{"beat_id":"beat_warn","objective":"Warning test","target_node_id":"t1"}`,
 		`{"id":"draft_1","beat_id":"beat_warn","title":"Scene","kind":"scene","text":"Text."}`,
@@ -1408,7 +1408,7 @@ func TestExecuteBeatPipelineCriticalWithoutApplyProceeds(t *testing.T) {
 	t.Parallel()
 
 	world := inspectionWorld()
-	bundle := bridgenarrative.AdaptWorld(world, bridgenarrative.Options{RecentEvents: 10})
+	bundle := rpgbridge.AdaptWorld(world, rpgbridge.Options{RecentEvents: 10})
 	gen := &beatFakeGenerator{responses: []string{
 		`{"beat_id":"beat_np","objective":"No apply","target_node_id":"thread_open"}`,
 		`{"id":"draft_1","beat_id":"beat_np","title":"Scene","kind":"scene","text":"Text."}`,
@@ -1431,7 +1431,7 @@ func TestExecuteBeatPipelineIncludesTiming(t *testing.T) {
 	t.Parallel()
 
 	world := inspectionWorld()
-	bundle := bridgenarrative.AdaptWorld(world, bridgenarrative.Options{RecentEvents: 10})
+	bundle := rpgbridge.AdaptWorld(world, rpgbridge.Options{RecentEvents: 10})
 	gen := &beatFakeGenerator{responses: []string{
 		`{"beat_id":"beat_t","objective":"Timing test","target_node_id":"thread_open"}`,
 		`{"id":"d1","beat_id":"beat_t","title":"Scene","kind":"scene","text":"Text."}`,
@@ -1470,7 +1470,7 @@ func TestExecuteBeatPipelineTimingIncludesRewrites(t *testing.T) {
 	t.Parallel()
 
 	world := inspectionWorld()
-	bundle := bridgenarrative.AdaptWorld(world, bridgenarrative.Options{RecentEvents: 10})
+	bundle := rpgbridge.AdaptWorld(world, rpgbridge.Options{RecentEvents: 10})
 	gen := &beatFakeGenerator{responses: []string{
 		`{"beat_id":"beat_rw","objective":"Rewrite timing","target_node_id":"thread_open"}`,
 		`{"id":"d1","beat_id":"beat_rw","title":"Scene","kind":"scene","text":"Text."}`,
@@ -1518,7 +1518,7 @@ func TestExecuteBeatPipelineIncludesTokenUsage(t *testing.T) {
 	t.Parallel()
 
 	world := inspectionWorld()
-	bundle := bridgenarrative.AdaptWorld(world, bridgenarrative.Options{RecentEvents: 10})
+	bundle := rpgbridge.AdaptWorld(world, rpgbridge.Options{RecentEvents: 10})
 	gen := &beatFakeGeneratorWithUsage{
 		beatFakeGenerator: beatFakeGenerator{responses: []string{
 			`{"beat_id":"beat_u","objective":"Usage test","target_node_id":"thread_open"}`,
@@ -1550,7 +1550,7 @@ func TestExecuteBeatPipelineNoUsageWithoutTracker(t *testing.T) {
 	t.Parallel()
 
 	world := inspectionWorld()
-	bundle := bridgenarrative.AdaptWorld(world, bridgenarrative.Options{RecentEvents: 10})
+	bundle := rpgbridge.AdaptWorld(world, rpgbridge.Options{RecentEvents: 10})
 	gen := &beatFakeGenerator{responses: []string{
 		`{"beat_id":"beat_n","objective":"No usage","target_node_id":"thread_open"}`,
 		`{"id":"d1","beat_id":"beat_n","title":"Scene","kind":"scene","text":"T."}`,
@@ -1578,7 +1578,7 @@ func TestExecuteBeatPipelinePlanOnly(t *testing.T) {
 	t.Parallel()
 
 	world := inspectionWorld()
-	bundle := bridgenarrative.AdaptWorld(world, bridgenarrative.Options{RecentEvents: 10})
+	bundle := rpgbridge.AdaptWorld(world, rpgbridge.Options{RecentEvents: 10})
 	gen := &beatFakeGenerator{responses: []string{
 		`{"beat_id":"beat_p","objective":"Plan only test","target_node_id":"thread_open"}`,
 		`{"id":"d1","beat_id":"beat_p","title":"Scene","kind":"scene","text":"Should not run."}`,
@@ -1686,7 +1686,7 @@ func TestPipelineWithHookCallsAllStages(t *testing.T) {
 	t.Parallel()
 
 	world := inspectionWorld()
-	bundle := bridgenarrative.AdaptWorld(world, bridgenarrative.Options{RecentEvents: 10})
+	bundle := rpgbridge.AdaptWorld(world, rpgbridge.Options{RecentEvents: 10})
 
 	gen := &beatFakeGenerator{responses: []string{
 		`{"beat_id":"beat_hook","objective":"Hook test","target_node_id":"thread_open"}`,
@@ -1720,7 +1720,7 @@ func TestPipelineWithHookAbortAfterPlan(t *testing.T) {
 	t.Parallel()
 
 	world := inspectionWorld()
-	bundle := bridgenarrative.AdaptWorld(world, bridgenarrative.Options{RecentEvents: 10})
+	bundle := rpgbridge.AdaptWorld(world, rpgbridge.Options{RecentEvents: 10})
 
 	gen := &beatFakeGenerator{responses: []string{
 		`{"beat_id":"beat_a","objective":"Abort","target_node_id":"thread_open"}`,
@@ -1746,7 +1746,7 @@ func TestPipelineWithHookFeedbackPropagates(t *testing.T) {
 	t.Parallel()
 
 	world := inspectionWorld()
-	bundle := bridgenarrative.AdaptWorld(world, bridgenarrative.Options{RecentEvents: 10})
+	bundle := rpgbridge.AdaptWorld(world, rpgbridge.Options{RecentEvents: 10})
 
 	gen := &beatFakeGenerator{responses: []string{
 		`{"beat_id":"beat_fb","objective":"Feedback","target_node_id":"thread_open"}`,
@@ -1801,7 +1801,7 @@ func TestRunBeatMultiStepAccumulatesResults(t *testing.T) {
 	_ = genFactory
 
 	var stdout, stderr bytes.Buffer
-	bundle := bridgenarrative.AdaptWorld(world, bridgenarrative.Options{RecentEvents: 10})
+	bundle := rpgbridge.AdaptWorld(world, rpgbridge.Options{RecentEvents: 10})
 
 	results := make([]beatOutput, 0, 3)
 	for step := 0; step < 3; step++ {
@@ -1809,7 +1809,7 @@ func TestRunBeatMultiStepAccumulatesResults(t *testing.T) {
 		if err != nil {
 			t.Fatalf("LoadSnapshot step %d: %v", step, err)
 		}
-		bundle = bridgenarrative.AdaptWorld(w, bridgenarrative.Options{RecentEvents: 10})
+		bundle = rpgbridge.AdaptWorld(w, rpgbridge.Options{RecentEvents: 10})
 		result, pErr := executeBeatPipeline(ctx, gen, w, bundle, st, 0, &stderr)
 		if pErr != nil {
 			t.Fatalf("step %d: %v", step, pErr)
