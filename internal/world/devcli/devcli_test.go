@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	bridgenarrative "github.com/sizolity/nobody/internal/bridge/narrative"
 	"github.com/sizolity/nobody/internal/world/model"
 	"github.com/sizolity/nobody/internal/world/store"
 	worldview "github.com/sizolity/nobody/internal/world/view"
@@ -1002,6 +1003,159 @@ func TestRunRollbackRequiresSequenceArg(t *testing.T) {
 	if code != 2 {
 		t.Fatalf("expected exit code 2, got %d", code)
 	}
+}
+
+// --- beat command tests ---
+
+func TestRunBeatRequiresFlags(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{"beat"}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("beat with no flags should exit 2, got %d", code)
+	}
+}
+
+func TestRunBeatRequiresAPIKey(t *testing.T) {
+	workspace := t.TempDir()
+	ctx := context.Background()
+	st := store.NewFileStore(workspace)
+	if err := st.SaveSnapshot(ctx, inspectionWorld()); err != nil {
+		t.Fatalf("SaveSnapshot: %v", err)
+	}
+
+	t.Setenv("DEEPSEEK_API_KEY", "")
+	var stdout, stderr bytes.Buffer
+	code := Run(ctx, []string{
+		"beat",
+		"--workspace", workspace,
+		"--world-id", "test_world",
+	}, &stdout, &stderr)
+	if code == 0 {
+		t.Fatal("beat should fail without DEEPSEEK_API_KEY")
+	}
+	if !bytes.Contains(stderr.Bytes(), []byte("DEEPSEEK_API_KEY")) {
+		t.Fatalf("stderr should mention DEEPSEEK_API_KEY: %s", stderr.String())
+	}
+}
+
+func TestRunBeatMissingWorld(t *testing.T) {
+	workspace := t.TempDir()
+	t.Setenv("DEEPSEEK_API_KEY", "test-key")
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), []string{
+		"beat",
+		"--workspace", workspace,
+		"--world-id", "nonexistent",
+	}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("expected exit code 1 for missing world, got %d", code)
+	}
+	if !bytes.Contains(stderr.Bytes(), []byte("load world")) {
+		t.Fatalf("stderr should mention load world: %s", stderr.String())
+	}
+}
+
+func TestExecuteBeatPipelineProducesJSON(t *testing.T) {
+	t.Parallel()
+
+	world := inspectionWorld()
+	bundle := bridgenarrative.AdaptWorld(world, bridgenarrative.Options{RecentEvents: 10})
+
+	gen := &beatFakeGenerator{responses: []string{
+		`{"beat_id":"beat_test","objective":"Test beat","target_node_id":"thread_open"}`,
+		`{"id":"draft_1","beat_id":"beat_test","title":"Test Scene","kind":"scene","text":"The world shifted."}`,
+		`{"issues":[{"code":"TONE_MISMATCH","summary":"Too dark for a lighthearted world."}]}`,
+		`{"events":[{"id":"ev_1","beat_id":"beat_test","type":"scene","summary":"World shifted."}],"memories":[{"id":"mem_1","type":"observation","subject":"world","text":"Something changed.","importance":3}]}`,
+		`{"graph":{"current_node_id":"thread_open","nodes":[{"id":"thread_open","type":"mystery","status":"active","goal":"Open mystery"}]}}`,
+	}}
+
+	var stdout, stderr bytes.Buffer
+	code := executeBeatPipeline(context.Background(), gen, world, bundle, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("executeBeatPipeline exit %d, stderr=%s", code, stderr.String())
+	}
+
+	var out beatOutput
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("unmarshal output: %v\nraw: %s", err, stdout.String())
+	}
+	if out.WorldID != "test_world" {
+		t.Errorf("world_id = %q", out.WorldID)
+	}
+	if out.Plan.BeatID != "beat_test" {
+		t.Errorf("plan.beat_id = %q", out.Plan.BeatID)
+	}
+	if out.Draft.Title != "Test Scene" {
+		t.Errorf("draft.title = %q", out.Draft.Title)
+	}
+	if out.Draft.Text != "The world shifted." {
+		t.Errorf("draft.text = %q", out.Draft.Text)
+	}
+	if len(out.ContinuityIssues) != 1 {
+		t.Fatalf("continuity issues = %d, want 1", len(out.ContinuityIssues))
+	}
+	if out.ContinuityIssues[0].Code != "TONE_MISMATCH" {
+		t.Errorf("issue code = %q", out.ContinuityIssues[0].Code)
+	}
+	if len(out.Events) != 1 {
+		t.Fatalf("events = %d, want 1", len(out.Events))
+	}
+	if out.Events[0].ID != "ev_1" {
+		t.Errorf("event id = %q", out.Events[0].ID)
+	}
+	if len(out.Memories) != 1 {
+		t.Fatalf("memories = %d, want 1", len(out.Memories))
+	}
+	if out.Memories[0].Importance != 3 {
+		t.Errorf("memory importance = %d", out.Memories[0].Importance)
+	}
+	if out.Graph.CurrentNodeID != "thread_open" {
+		t.Errorf("graph current = %q", out.Graph.CurrentNodeID)
+	}
+	if out.Graph.NodeCount != 1 {
+		t.Errorf("graph nodes = %d", out.Graph.NodeCount)
+	}
+
+	stderrStr := stderr.String()
+	for _, want := range []string{"beat planned", "draft written", "continuity:", "memory:", "graph:"} {
+		if !bytes.Contains(stderr.Bytes(), []byte(want)) {
+			t.Errorf("stderr missing %q: %s", want, stderrStr)
+		}
+	}
+}
+
+func TestExecuteBeatPipelineDirectorError(t *testing.T) {
+	t.Parallel()
+
+	world := inspectionWorld()
+	bundle := bridgenarrative.AdaptWorld(world, bridgenarrative.Options{RecentEvents: 10})
+
+	gen := &beatFakeGenerator{responses: []string{`not json`}}
+
+	var stdout, stderr bytes.Buffer
+	code := executeBeatPipeline(context.Background(), gen, world, bundle, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("expected exit 1, got %d", code)
+	}
+	if !bytes.Contains(stderr.Bytes(), []byte("director plan")) {
+		t.Errorf("stderr should mention director plan failure: %s", stderr.String())
+	}
+}
+
+type beatFakeGenerator struct {
+	responses []string
+	callIdx   int
+}
+
+func (g *beatFakeGenerator) Generate(_ context.Context, _, _ string) (string, error) {
+	if g.callIdx >= len(g.responses) {
+		return `{}`, nil
+	}
+	resp := g.responses[g.callIdx]
+	g.callIdx++
+	return resp, nil
 }
 
 func inspectionWorld() model.World {

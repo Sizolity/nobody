@@ -10,6 +10,7 @@ import (
 	"strconv"
 
 	bridgenarrative "github.com/sizolity/nobody/internal/bridge/narrative"
+	"github.com/sizolity/nobody/internal/narrative/engine"
 	"github.com/sizolity/nobody/internal/world/director"
 	directorconfig "github.com/sizolity/nobody/internal/world/director/config"
 	"github.com/sizolity/nobody/internal/world/model"
@@ -21,7 +22,7 @@ import (
 
 func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: nobody-world <init|apply-event|step-script|step-reconcile|step-config|step-llm|run|checkpoint|rollback|list-checkpoints|fork|bridge-context|debug-view|narrative-view|show>")
+		fmt.Fprintln(stderr, "usage: nobody-world <init|apply-event|step-script|step-reconcile|step-config|step-llm|run|checkpoint|rollback|list-checkpoints|fork|beat|bridge-context|debug-view|narrative-view|show>")
 		return 2
 	}
 	switch args[0] {
@@ -47,6 +48,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runListCheckpoints(ctx, args[1:], stdout, stderr)
 	case "fork":
 		return runFork(ctx, args[1:], stdout, stderr)
+	case "beat":
+		return runBeat(ctx, args[1:], stdout, stderr)
 	case "bridge-context":
 		return runBridgeContext(ctx, args[1:], stdout, stderr)
 	case "debug-view":
@@ -474,6 +477,148 @@ func runNarrativeView(ctx context.Context, args []string, stdout, stderr io.Writ
 	}
 	ctxView := worldview.NarrativeView{}.Render(world, worldview.NarrativeContextRequest{RecentEventLimit: *recentEvents})
 	return writeJSON(stdout, stderr, "encode narrative view failed", ctxView)
+}
+
+type beatOutput struct {
+	WorldID          string                  `json:"world_id"`
+	Plan             engine.BeatPlan         `json:"plan"`
+	Draft            beatOutputDraft         `json:"draft"`
+	ContinuityIssues []engine.ContinuityIssue `json:"continuity_issues"`
+	Events           []beatOutputEvent       `json:"events"`
+	Memories         []beatOutputMemory      `json:"memories"`
+	Graph            beatOutputGraph         `json:"graph"`
+}
+
+type beatOutputDraft struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+	Kind  string `json:"kind"`
+	Text  string `json:"text"`
+}
+
+type beatOutputEvent struct {
+	ID      string `json:"id"`
+	Type    string `json:"type"`
+	Summary string `json:"summary"`
+}
+
+type beatOutputMemory struct {
+	ID         string `json:"id"`
+	Type       string `json:"type"`
+	Subject    string `json:"subject"`
+	Text       string `json:"text"`
+	Importance int    `json:"importance"`
+}
+
+type beatOutputGraph struct {
+	CurrentNodeID string `json:"current_node_id"`
+	NodeCount     int    `json:"node_count"`
+}
+
+func runBeat(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	fs := newFlagSet("beat", stderr)
+	workspace := fs.String("workspace", "", "workspace directory")
+	worldID := fs.String("world-id", "", "world id")
+	provider := fs.String("provider", "deepseek", "LLM provider")
+	modelName := fs.String("model", "", "model name (default per provider)")
+	userInput := fs.String("input", "", "optional user input / prompt to steer the beat")
+	recentEvents := fs.Int("recent-events", 20, "max recent world events included in context")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *workspace == "" || *worldID == "" {
+		fmt.Fprintln(stderr, "beat requires --workspace and --world-id")
+		return 2
+	}
+
+	world, err := store.NewFileStore(*workspace).LoadSnapshot(ctx, *worldID)
+	if err != nil {
+		fmt.Fprintf(stderr, "load world: %v\n", err)
+		return 1
+	}
+
+	bundle := bridgenarrative.AdaptWorld(world, bridgenarrative.Options{
+		RecentEvents: *recentEvents,
+		UserInput:    *userInput,
+	})
+
+	gen, err := cliGeneratorFactory(*provider, *modelName)
+	if err != nil {
+		fmt.Fprintf(stderr, "create generator: %v\n", err)
+		return 1
+	}
+
+	return executeBeatPipeline(ctx, gen, world, bundle, stdout, stderr)
+}
+
+func executeBeatPipeline(ctx context.Context, gen engine.TextGenerator, world model.World, bundle engine.ContextBundle, stdout, stderr io.Writer) int {
+	directorAgent := engine.NewLLMDirectorAgent(gen)
+	writerAgent := engine.NewLLMWriterAgent(gen)
+	continuityAgent := engine.NewLLMContinuityAgent(gen)
+	memoryAgent := engine.NewLLMMemoryAgent(gen)
+	stateAgent := engine.NewLLMStateAgent(gen)
+
+	plan, err := directorAgent.PlanBeat(ctx, bundle)
+	if err != nil {
+		fmt.Fprintf(stderr, "director plan: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stderr, "beat planned: %s → %s\n", plan.BeatID, plan.Objective)
+
+	draft, err := writerAgent.WriteBeat(ctx, bundle, plan)
+	if err != nil {
+		fmt.Fprintf(stderr, "writer draft: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stderr, "draft written: %s (%s)\n", draft.Title, draft.Kind)
+
+	report, err := continuityAgent.Check(ctx, bundle, draft)
+	if err != nil {
+		fmt.Fprintf(stderr, "continuity check: %v\n", err)
+		return 1
+	}
+	if len(report.Issues) > 0 {
+		fmt.Fprintf(stderr, "continuity: %d issue(s) found\n", len(report.Issues))
+	} else {
+		fmt.Fprintln(stderr, "continuity: clean")
+	}
+
+	memDelta, err := memoryAgent.Extract(ctx, bundle, draft)
+	if err != nil {
+		fmt.Fprintf(stderr, "memory extract: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stderr, "memory: %d event(s), %d memory(ies)\n", len(memDelta.Events), len(memDelta.Memories))
+
+	stateDelta, err := stateAgent.Apply(ctx, bundle, plan, memDelta)
+	if err != nil {
+		fmt.Fprintf(stderr, "state update: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stderr, "graph: %d node(s), current=%s\n", len(stateDelta.Graph.Nodes), stateDelta.Graph.CurrentNodeID)
+
+	events := make([]beatOutputEvent, 0, len(memDelta.Events))
+	for _, ev := range memDelta.Events {
+		events = append(events, beatOutputEvent{
+			ID: ev.ID, Type: ev.Type, Summary: ev.Summary,
+		})
+	}
+	memories := make([]beatOutputMemory, 0, len(memDelta.Memories))
+	for _, m := range memDelta.Memories {
+		memories = append(memories, beatOutputMemory{
+			ID: m.ID, Type: m.Type, Subject: m.Subject, Text: m.Text, Importance: m.Importance,
+		})
+	}
+
+	return writeJSON(stdout, stderr, "encode beat output failed", beatOutput{
+		WorldID:          string(world.ID),
+		Plan:             plan,
+		Draft:            beatOutputDraft{ID: draft.ID, Title: draft.Title, Kind: draft.Kind, Text: draft.Text},
+		ContinuityIssues: report.Issues,
+		Events:           events,
+		Memories:         memories,
+		Graph:            beatOutputGraph{CurrentNodeID: stateDelta.Graph.CurrentNodeID, NodeCount: len(stateDelta.Graph.Nodes)},
+	})
 }
 
 func writeJSON(stdout, stderr io.Writer, message string, v any) int {

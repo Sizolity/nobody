@@ -236,6 +236,306 @@ func TestStripFences(t *testing.T) {
 	}
 }
 
+// --- LLM Continuity Agent tests ---
+
+func TestLLMContinuityAgentParsesIssues(t *testing.T) {
+	t.Parallel()
+
+	resp := `{"issues":[{"code":"LOCATION_MISMATCH","summary":"Bob is in the tower but should be at market."}]}`
+	gen := &fakeTextGenerator{response: resp}
+	agent := NewLLMContinuityAgent(gen)
+
+	report, err := agent.Check(context.Background(), ContextBundle{
+		World: narrative.World{ID: "w", Title: "T"},
+	}, narrative.Draft{ID: "d", BeatID: "b", Title: "T", Kind: "scene", Text: "x"})
+	if err != nil {
+		t.Fatalf("Check error: %v", err)
+	}
+	if len(report.Issues) != 1 {
+		t.Fatalf("issues = %d, want 1", len(report.Issues))
+	}
+	if report.Issues[0].Code != "LOCATION_MISMATCH" {
+		t.Errorf("code = %q", report.Issues[0].Code)
+	}
+}
+
+func TestLLMContinuityAgentNoIssues(t *testing.T) {
+	t.Parallel()
+
+	gen := &fakeTextGenerator{response: `{"issues":[]}`}
+	agent := NewLLMContinuityAgent(gen)
+
+	report, err := agent.Check(context.Background(), ContextBundle{
+		World: narrative.World{ID: "w", Title: "T"},
+	}, narrative.Draft{})
+	if err != nil {
+		t.Fatalf("Check error: %v", err)
+	}
+	if len(report.Issues) != 0 {
+		t.Fatalf("issues = %d, want 0", len(report.Issues))
+	}
+}
+
+func TestLLMContinuityAgentNullIssuesBecomesEmpty(t *testing.T) {
+	t.Parallel()
+
+	gen := &fakeTextGenerator{response: `{}`}
+	agent := NewLLMContinuityAgent(gen)
+
+	report, err := agent.Check(context.Background(), ContextBundle{
+		World: narrative.World{ID: "w", Title: "T"},
+	}, narrative.Draft{})
+	if err != nil {
+		t.Fatalf("Check error: %v", err)
+	}
+	if report.Issues == nil {
+		t.Fatal("issues should be non-nil empty slice")
+	}
+}
+
+func TestLLMContinuityAgentPropagatesError(t *testing.T) {
+	t.Parallel()
+
+	gen := &fakeTextGenerator{err: fmt.Errorf("down")}
+	agent := NewLLMContinuityAgent(gen)
+
+	_, err := agent.Check(context.Background(), ContextBundle{}, narrative.Draft{})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestLLMContinuityAgentRejectsInvalidJSON(t *testing.T) {
+	t.Parallel()
+
+	gen := &fakeTextGenerator{response: "nope"}
+	agent := NewLLMContinuityAgent(gen)
+
+	_, err := agent.Check(context.Background(), ContextBundle{}, narrative.Draft{})
+	if err == nil {
+		t.Fatal("expected parse error")
+	}
+}
+
+func TestLLMContinuityAgentStripsMarkdown(t *testing.T) {
+	t.Parallel()
+
+	gen := &fakeTextGenerator{response: "```json\n{\"issues\":[]}\n```"}
+	agent := NewLLMContinuityAgent(gen)
+
+	report, err := agent.Check(context.Background(), ContextBundle{
+		World: narrative.World{ID: "w", Title: "T"},
+	}, narrative.Draft{})
+	if err != nil {
+		t.Fatalf("Check error: %v", err)
+	}
+	if len(report.Issues) != 0 {
+		t.Fatalf("issues = %d", len(report.Issues))
+	}
+}
+
+func TestLLMContinuityAgentCustomPrompt(t *testing.T) {
+	t.Parallel()
+
+	gen := &capturingTextGenerator{response: `{"issues":[]}`}
+	agent := NewLLMContinuityAgentWithPrompt(gen, "custom check")
+
+	agent.Check(context.Background(), ContextBundle{
+		World: narrative.World{ID: "w", Title: "T"},
+	}, narrative.Draft{})
+	if gen.lastSystem != "custom check" {
+		t.Fatalf("system = %q", gen.lastSystem)
+	}
+}
+
+// --- LLM Memory Agent tests ---
+
+func TestLLMMemoryAgentParsesEventsAndMemories(t *testing.T) {
+	t.Parallel()
+
+	resp := `{
+		"events": [{"id":"event_arrival","beat_id":"beat_x","type":"scene","summary":"The merchant arrived.","participant_ids":["char_1"]}],
+		"memories": [{"id":"mem_fear","type":"emotion","subject":"char_1","text":"Felt uneasy.","importance":4}]
+	}`
+	gen := &fakeTextGenerator{response: resp}
+	agent := NewLLMMemoryAgent(gen)
+
+	delta, err := agent.Extract(context.Background(), ContextBundle{
+		World: narrative.World{ID: "w", Title: "T"},
+	}, narrative.Draft{BeatID: "beat_x"})
+	if err != nil {
+		t.Fatalf("Extract error: %v", err)
+	}
+	if len(delta.Events) != 1 {
+		t.Fatalf("events = %d, want 1", len(delta.Events))
+	}
+	if delta.Events[0].ID != "event_arrival" {
+		t.Errorf("event id = %q", delta.Events[0].ID)
+	}
+	if delta.Events[0].BeatID != "beat_x" {
+		t.Errorf("beat_id = %q", delta.Events[0].BeatID)
+	}
+	if len(delta.Events[0].ParticipantIDs) != 1 {
+		t.Errorf("participants = %d", len(delta.Events[0].ParticipantIDs))
+	}
+	if len(delta.Memories) != 1 {
+		t.Fatalf("memories = %d, want 1", len(delta.Memories))
+	}
+	if delta.Memories[0].Subject != "char_1" {
+		t.Errorf("subject = %q", delta.Memories[0].Subject)
+	}
+	if delta.Memories[0].Importance != 4 {
+		t.Errorf("importance = %d", delta.Memories[0].Importance)
+	}
+}
+
+func TestLLMMemoryAgentNullFieldsBecomeEmpty(t *testing.T) {
+	t.Parallel()
+
+	gen := &fakeTextGenerator{response: `{}`}
+	agent := NewLLMMemoryAgent(gen)
+
+	delta, err := agent.Extract(context.Background(), ContextBundle{
+		World: narrative.World{ID: "w", Title: "T"},
+	}, narrative.Draft{})
+	if err != nil {
+		t.Fatalf("Extract error: %v", err)
+	}
+	if delta.Events == nil {
+		t.Error("events should be non-nil")
+	}
+	if delta.Memories == nil {
+		t.Error("memories should be non-nil")
+	}
+}
+
+func TestLLMMemoryAgentPropagatesError(t *testing.T) {
+	t.Parallel()
+
+	gen := &fakeTextGenerator{err: fmt.Errorf("down")}
+	agent := NewLLMMemoryAgent(gen)
+
+	_, err := agent.Extract(context.Background(), ContextBundle{}, narrative.Draft{})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestLLMMemoryAgentRejectsInvalidJSON(t *testing.T) {
+	t.Parallel()
+
+	gen := &fakeTextGenerator{response: "bad"}
+	agent := NewLLMMemoryAgent(gen)
+
+	_, err := agent.Extract(context.Background(), ContextBundle{}, narrative.Draft{})
+	if err == nil {
+		t.Fatal("expected parse error")
+	}
+}
+
+func TestLLMMemoryAgentCustomPrompt(t *testing.T) {
+	t.Parallel()
+
+	gen := &capturingTextGenerator{response: `{"events":[],"memories":[]}`}
+	agent := NewLLMMemoryAgentWithPrompt(gen, "custom memory")
+
+	agent.Extract(context.Background(), ContextBundle{
+		World: narrative.World{ID: "w", Title: "T"},
+	}, narrative.Draft{})
+	if gen.lastSystem != "custom memory" {
+		t.Fatalf("system = %q", gen.lastSystem)
+	}
+}
+
+// --- LLM State Agent tests ---
+
+func TestLLMStateAgentParsesGraph(t *testing.T) {
+	t.Parallel()
+
+	resp := `{"graph":{"current_node_id":"n2","nodes":[
+		{"id":"n1","type":"quest","status":"completed","goal":"Find artifact"},
+		{"id":"n2","type":"conflict","status":"active","goal":"Confront the villain"}
+	]}}`
+	gen := &fakeTextGenerator{response: resp}
+	agent := NewLLMStateAgent(gen)
+
+	bundle := ContextBundle{
+		World: narrative.World{ID: "w", Title: "T"},
+		Graph: narrative.StoryGraph{CurrentNodeID: "n1", Nodes: []narrative.StoryNode{
+			{ID: "n1", Type: "quest", Status: "active", Goal: "Find artifact"},
+		}},
+	}
+	sd, err := agent.Apply(context.Background(), bundle, BeatPlan{BeatID: "b"}, MemoryDelta{})
+	if err != nil {
+		t.Fatalf("Apply error: %v", err)
+	}
+	if sd.Graph.CurrentNodeID != "n2" {
+		t.Errorf("current = %q", sd.Graph.CurrentNodeID)
+	}
+	if len(sd.Graph.Nodes) != 2 {
+		t.Fatalf("nodes = %d, want 2", len(sd.Graph.Nodes))
+	}
+	if sd.Graph.Nodes[0].Status != "completed" {
+		t.Errorf("n1 status = %q", sd.Graph.Nodes[0].Status)
+	}
+}
+
+func TestLLMStateAgentPropagatesError(t *testing.T) {
+	t.Parallel()
+
+	gen := &fakeTextGenerator{err: fmt.Errorf("down")}
+	agent := NewLLMStateAgent(gen)
+
+	_, err := agent.Apply(context.Background(), ContextBundle{}, BeatPlan{}, MemoryDelta{})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestLLMStateAgentRejectsInvalidJSON(t *testing.T) {
+	t.Parallel()
+
+	gen := &fakeTextGenerator{response: "nope"}
+	agent := NewLLMStateAgent(gen)
+
+	_, err := agent.Apply(context.Background(), ContextBundle{}, BeatPlan{}, MemoryDelta{})
+	if err == nil {
+		t.Fatal("expected parse error")
+	}
+}
+
+func TestLLMStateAgentStripsMarkdown(t *testing.T) {
+	t.Parallel()
+
+	inner := `{"graph":{"current_node_id":"n1","nodes":[{"id":"n1","type":"t","status":"active","goal":"g"}]}}`
+	gen := &fakeTextGenerator{response: "```json\n" + inner + "\n```"}
+	agent := NewLLMStateAgent(gen)
+
+	sd, err := agent.Apply(context.Background(), ContextBundle{
+		World: narrative.World{ID: "w", Title: "T"},
+	}, BeatPlan{}, MemoryDelta{})
+	if err != nil {
+		t.Fatalf("Apply error: %v", err)
+	}
+	if sd.Graph.CurrentNodeID != "n1" {
+		t.Errorf("current = %q", sd.Graph.CurrentNodeID)
+	}
+}
+
+func TestLLMStateAgentCustomPrompt(t *testing.T) {
+	t.Parallel()
+
+	gen := &capturingTextGenerator{response: `{"graph":{"current_node_id":"n1","nodes":[{"id":"n1","type":"t","status":"s","goal":"g"}]}}`}
+	agent := NewLLMStateAgentWithPrompt(gen, "custom state")
+
+	agent.Apply(context.Background(), ContextBundle{
+		World: narrative.World{ID: "w", Title: "T"},
+	}, BeatPlan{}, MemoryDelta{})
+	if gen.lastSystem != "custom state" {
+		t.Fatalf("system = %q", gen.lastSystem)
+	}
+}
+
 // --- test helpers ---
 
 type fakeTextGenerator struct {
