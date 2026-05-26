@@ -181,3 +181,10 @@ const (
 	ThreadStatusFailed    = internal.ThreadStatusFailed
 	ThreadStatusAbandoned = internal.ThreadStatusAbandoned
 )
+
+// Queue error policy constants.
+const (
+	QueueErrorPolicyFail  = internal.QueueErrorPolicyFail
+	QueueErrorPolicySkip  = internal.QueueErrorPolicySkip
+	QueueErrorPolicyRetry = internal.QueueErrorPolicyRetry
+)

@@ -266,6 +266,45 @@ func TestEventQueueItemValidateRequiresValidEvent(t *testing.T) {
 	}
 }
 
+func TestEventQueueItemValidateAcceptsErrorPolicies(t *testing.T) {
+	t.Parallel()
+
+	for _, policy := range []string{"", QueueErrorPolicyFail, QueueErrorPolicySkip, QueueErrorPolicyRetry} {
+		item := EventQueueItem{
+			Event:       WorldEvent{ID: "event_1", Type: EventTypeNote, Source: EventSourceRuntime},
+			ErrorPolicy: policy,
+		}
+		if err := item.Validate(); err != nil {
+			t.Fatalf("Validate returned error for policy %q: %v", policy, err)
+		}
+	}
+}
+
+func TestEventQueueItemValidateRejectsUnsupportedErrorPolicy(t *testing.T) {
+	t.Parallel()
+
+	item := EventQueueItem{
+		Event:       WorldEvent{ID: "event_1", Type: EventTypeNote, Source: EventSourceRuntime},
+		ErrorPolicy: "explode",
+	}
+	if err := item.Validate(); err == nil {
+		t.Fatal("Validate returned nil for unsupported error_policy")
+	}
+}
+
+func TestEventQueueItemValidateRejectsNegativeMaxAttempts(t *testing.T) {
+	t.Parallel()
+
+	item := EventQueueItem{
+		Event:       WorldEvent{ID: "event_1", Type: EventTypeNote, Source: EventSourceRuntime},
+		ErrorPolicy: QueueErrorPolicyRetry,
+		MaxAttempts: -1,
+	}
+	if err := item.Validate(); err == nil {
+		t.Fatal("Validate returned nil for negative max_attempts")
+	}
+}
+
 func TestEventQueueItemJSONRoundTrip(t *testing.T) {
 	item := EventQueueItem{
 		Event:    WorldEvent{ID: "event_queued", Type: EventTypeNote, Source: EventSourceRuntime},

@@ -83,11 +83,20 @@ type WorldMetadata struct {
 }
 
 type EventQueueItem struct {
-	Event     WorldEvent `json:"event"`
-	Priority  int        `json:"priority,omitempty"`
-	NotBefore WorldTime  `json:"not_before,omitempty"`
-	CreatedBy string     `json:"created_by,omitempty"`
+	Event       WorldEvent `json:"event"`
+	Priority    int        `json:"priority,omitempty"`
+	NotBefore   WorldTime  `json:"not_before,omitempty"`
+	CreatedBy   string     `json:"created_by,omitempty"`
+	ErrorPolicy string     `json:"error_policy,omitempty"`
+	Attempts    int        `json:"attempts,omitempty"`
+	MaxAttempts int        `json:"max_attempts,omitempty"`
 }
+
+const (
+	QueueErrorPolicyFail  = "fail"
+	QueueErrorPolicySkip  = "skip"
+	QueueErrorPolicyRetry = "retry"
+)
 
 func (i EventQueueItem) Validate() error {
 	if err := i.Event.Validate(); err != nil {
@@ -98,7 +107,22 @@ func (i EventQueueItem) Validate() error {
 			return fmt.Errorf("created_by: %w", err)
 		}
 	}
+	if !isSupportedQueueErrorPolicy(i.ErrorPolicy) {
+		return fmt.Errorf("unsupported error_policy %q", i.ErrorPolicy)
+	}
+	if i.MaxAttempts < 0 {
+		return fmt.Errorf("max_attempts must be >= 0")
+	}
 	return nil
+}
+
+func isSupportedQueueErrorPolicy(policy string) bool {
+	switch policy {
+	case "", QueueErrorPolicyFail, QueueErrorPolicySkip, QueueErrorPolicyRetry:
+		return true
+	default:
+		return false
+	}
 }
 
 func (i *EventQueueItem) UnmarshalJSON(data []byte) error {

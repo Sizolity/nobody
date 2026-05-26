@@ -19,6 +19,7 @@ type StepResult struct {
 	World         model.World        `json:"world"`
 	Proposals     []model.WorldEvent `json:"proposals"`
 	AppliedEvents []model.WorldEvent `json:"applied_events"`
+	SkippedEvents []model.WorldEvent `json:"skipped_events,omitempty"`
 }
 
 func (r Runtime) Step(world model.World) (StepResult, error) {
@@ -26,6 +27,7 @@ func (r Runtime) Step(world model.World) (StepResult, error) {
 		World:         world,
 		Proposals:     []model.WorldEvent{},
 		AppliedEvents: []model.WorldEvent{},
+		SkippedEvents: []model.WorldEvent{},
 	}
 	for _, d := range r.Directors {
 		proposals, err := d.Propose(director.Context{World: cloneWorldForMutation(result.World)})
@@ -42,8 +44,9 @@ func (r Runtime) Step(world model.World) (StepResult, error) {
 		result.World = next
 		result.AppliedEvents = append(result.AppliedEvents, proposal)
 	}
+	retriedThisStep := map[model.EventID]bool{}
 	for i := 0; i < r.EventQueueLimit && len(result.World.EventQueue) > 0; i++ {
-		queueIndex, ok := nextReadyQueueIndex(result.World)
+		queueIndex, ok := nextReadyQueueIndexExcluding(result.World, retriedThisStep)
 		if !ok {
 			break
 		}
@@ -51,7 +54,22 @@ func (r Runtime) Step(world model.World) (StepResult, error) {
 		result.World.EventQueue = removeQueueItem(result.World.EventQueue, queueIndex)
 		next, err := r.ApplyEvent(result.World, item.Event)
 		if err != nil {
-			return result, fmt.Errorf("queued event %d: %w", i, err)
+			switch item.ErrorPolicy {
+			case model.QueueErrorPolicySkip:
+				result.SkippedEvents = append(result.SkippedEvents, item.Event)
+				continue
+			case model.QueueErrorPolicyRetry:
+				item.Attempts++
+				if item.MaxAttempts > 0 && item.Attempts >= item.MaxAttempts {
+					result.SkippedEvents = append(result.SkippedEvents, item.Event)
+					continue
+				}
+				retriedThisStep[item.Event.ID] = true
+				result.World.EventQueue = append(result.World.EventQueue, item)
+				continue
+			default:
+				return result, fmt.Errorf("queued event %d: %w", i, err)
+			}
 		}
 		result.World = next
 		result.AppliedEvents = append(result.AppliedEvents, item.Event)
@@ -252,8 +270,15 @@ func cloneAny(value any) any {
 }
 
 func nextReadyQueueIndex(world model.World) (int, bool) {
+	return nextReadyQueueIndexExcluding(world, nil)
+}
+
+func nextReadyQueueIndexExcluding(world model.World, exclude map[model.EventID]bool) (int, bool) {
 	bestIndex := -1
 	for i, item := range world.EventQueue {
+		if exclude[item.Event.ID] {
+			continue
+		}
 		if !queueItemReady(world.Clock.Current, item) {
 			continue
 		}

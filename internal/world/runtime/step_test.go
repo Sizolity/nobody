@@ -309,6 +309,116 @@ func TestRuntimeStepReturnsApplyErrorsWithPriorAppliedEvents(t *testing.T) {
 	}
 }
 
+func TestRuntimeStepSkipsFailedQueuedEventWithSkipPolicy(t *testing.T) {
+	t.Parallel()
+
+	world := model.World{
+		ID:   "world_1",
+		Name: "World",
+		EventQueue: []model.EventQueueItem{
+			{
+				Event:       model.WorldEvent{ID: "event_bad", Type: model.EventTypeNote, Source: model.EventSourceRuntime, Effects: []model.Effect{{Kind: model.EffectReviseMemory, TargetID: "missing"}}},
+				ErrorPolicy: model.QueueErrorPolicySkip,
+			},
+			{
+				Event: model.WorldEvent{ID: "event_good", Type: model.EventTypeNote, Source: model.EventSourceRuntime},
+			},
+		},
+	}
+
+	got, err := NewRuntime(WithoutRules(), WithEventQueueLimit(10)).Step(world)
+	if err != nil {
+		t.Fatalf("Step returned error: %v", err)
+	}
+	if len(got.AppliedEvents) != 1 || got.AppliedEvents[0].ID != "event_good" {
+		t.Fatalf("AppliedEvents = %#v, want only event_good", got.AppliedEvents)
+	}
+	if len(got.World.EventQueue) != 0 {
+		t.Fatalf("EventQueue should be empty: %#v", got.World.EventQueue)
+	}
+	if len(got.SkippedEvents) != 1 || got.SkippedEvents[0].ID != "event_bad" {
+		t.Fatalf("SkippedEvents = %#v, want event_bad", got.SkippedEvents)
+	}
+}
+
+func TestRuntimeStepRetriesFailedQueuedEventWithRetryPolicy(t *testing.T) {
+	t.Parallel()
+
+	world := model.World{
+		ID:   "world_1",
+		Name: "World",
+		EventQueue: []model.EventQueueItem{
+			{
+				Event:       model.WorldEvent{ID: "event_retry", Type: model.EventTypeNote, Source: model.EventSourceRuntime, Effects: []model.Effect{{Kind: model.EffectReviseMemory, TargetID: "missing"}}},
+				ErrorPolicy: model.QueueErrorPolicyRetry,
+				MaxAttempts: 3,
+			},
+		},
+	}
+
+	got, err := NewRuntime(WithoutRules(), WithEventQueueLimit(10)).Step(world)
+	if err != nil {
+		t.Fatalf("Step returned error: %v", err)
+	}
+	if len(got.AppliedEvents) != 0 {
+		t.Fatalf("AppliedEvents should be empty: %#v", got.AppliedEvents)
+	}
+	if len(got.World.EventQueue) != 1 {
+		t.Fatalf("EventQueue should still contain retry item: %#v", got.World.EventQueue)
+	}
+	if got.World.EventQueue[0].Attempts != 1 {
+		t.Fatalf("Attempts = %d, want 1", got.World.EventQueue[0].Attempts)
+	}
+}
+
+func TestRuntimeStepDropsRetryEventAfterMaxAttempts(t *testing.T) {
+	t.Parallel()
+
+	world := model.World{
+		ID:   "world_1",
+		Name: "World",
+		EventQueue: []model.EventQueueItem{
+			{
+				Event:       model.WorldEvent{ID: "event_exhausted", Type: model.EventTypeNote, Source: model.EventSourceRuntime, Effects: []model.Effect{{Kind: model.EffectReviseMemory, TargetID: "missing"}}},
+				ErrorPolicy: model.QueueErrorPolicyRetry,
+				MaxAttempts: 2,
+				Attempts:    1,
+			},
+		},
+	}
+
+	got, err := NewRuntime(WithoutRules(), WithEventQueueLimit(10)).Step(world)
+	if err != nil {
+		t.Fatalf("Step returned error: %v", err)
+	}
+	if len(got.World.EventQueue) != 0 {
+		t.Fatalf("exhausted retry event should be dropped: %#v", got.World.EventQueue)
+	}
+	if len(got.SkippedEvents) != 1 || got.SkippedEvents[0].ID != "event_exhausted" {
+		t.Fatalf("SkippedEvents = %#v, want event_exhausted", got.SkippedEvents)
+	}
+}
+
+func TestRuntimeStepFailsPolicyStillFailsStep(t *testing.T) {
+	t.Parallel()
+
+	world := model.World{
+		ID:   "world_1",
+		Name: "World",
+		EventQueue: []model.EventQueueItem{
+			{
+				Event:       model.WorldEvent{ID: "event_fail", Type: model.EventTypeNote, Source: model.EventSourceRuntime, Effects: []model.Effect{{Kind: model.EffectReviseMemory, TargetID: "missing"}}},
+				ErrorPolicy: model.QueueErrorPolicyFail,
+			},
+		},
+	}
+
+	_, err := NewRuntime(WithoutRules(), WithEventQueueLimit(10)).Step(world)
+	if err == nil {
+		t.Fatal("Step should return error for fail policy")
+	}
+}
+
 func TestRuntimeStepAdvancesClockSequence(t *testing.T) {
 	t.Parallel()
 
