@@ -9,6 +9,7 @@ import (
 	"os"
 
 	"github.com/sizolity/nobody/internal/world/director"
+	directorconfig "github.com/sizolity/nobody/internal/world/director/config"
 	"github.com/sizolity/nobody/internal/world/model"
 	"github.com/sizolity/nobody/internal/world/runner"
 	worldruntime "github.com/sizolity/nobody/internal/world/runtime"
@@ -18,7 +19,7 @@ import (
 
 func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: nobody-world <init|apply-event|show>")
+		fmt.Fprintln(stderr, "usage: nobody-world <init|apply-event|step-script|step-reconcile|step-config|debug-view|narrative-view|show>")
 		return 2
 	}
 	switch args[0] {
@@ -30,6 +31,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runStepScript(ctx, args[1:], stdout, stderr)
 	case "step-reconcile":
 		return runStepReconcile(ctx, args[1:], stdout, stderr)
+	case "step-config":
+		return runStepConfig(ctx, args[1:], stdout, stderr)
 	case "debug-view":
 		return runDebugView(ctx, args[1:], stdout, stderr)
 	case "narrative-view":
@@ -147,6 +150,41 @@ func runStepReconcile(ctx context.Context, args []string, stdout, stderr io.Writ
 		return 1
 	}
 	fmt.Fprintf(stdout, "applied %d reconciliation events to world %s\n", len(result.AppliedEvents), result.World.ID)
+	return 0
+}
+
+func runStepConfig(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	fs := newFlagSet("step-config", stderr)
+	workspace := fs.String("workspace", "", "workspace directory")
+	worldID := fs.String("world-id", "", "world id")
+	configFile := fs.String("config-file", "", "director config JSON file")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *workspace == "" || *worldID == "" || *configFile == "" {
+		fmt.Fprintln(stderr, "step-config requires --workspace, --world-id, and --config-file")
+		return 2
+	}
+	data, err := os.ReadFile(*configFile)
+	if err != nil {
+		fmt.Fprintf(stderr, "read director config failed: %v\n", err)
+		return 1
+	}
+	directors, err := directorconfig.LoadDirectors(data)
+	if err != nil {
+		fmt.Fprintf(stderr, "load director config failed: %v\n", err)
+		return 1
+	}
+	r := runner.New(
+		store.NewFileStore(*workspace),
+		worldruntime.WithDirectors(directors...),
+	)
+	result, err := r.Step(ctx, *worldID)
+	if err != nil {
+		fmt.Fprintf(stderr, "step-config failed: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "applied %d configured events to world %s\n", len(result.AppliedEvents), result.World.ID)
 	return 0
 }
 

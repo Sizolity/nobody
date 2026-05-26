@@ -491,6 +491,101 @@ func TestRunStepReconcilePersistsConfiguredCases(t *testing.T) {
 	}
 }
 
+func TestRunStepConfigPersistsConfiguredDirectors(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	ctx := context.Background()
+	st := store.NewFileStore(workspace)
+	initial := model.World{
+		ID:   "test_world",
+		Name: "Test World",
+		Memory: []model.MemoryRecord{{
+			ID:          "memory_1",
+			Owner:       model.MemoryOwner{Kind: model.MemoryOwnerKindCharacter, ID: "char_c"},
+			Scope:       model.MemoryScopeSubjective,
+			Kind:        model.MemoryKindBelief,
+			Content:     "A killed the king.",
+			TruthStatus: model.TruthStatusUnknown,
+			Confidence:  0.8,
+		}},
+	}
+	if err := st.SaveSnapshot(ctx, initial); err != nil {
+		t.Fatalf("SaveSnapshot returned error: %v", err)
+	}
+	configPath := filepath.Join(workspace, "directors.json")
+	const configJSON = `{
+  "directors": [
+    {
+      "id": "script_1",
+      "kind": "script",
+      "events": [
+        {
+          "id": "event_script_1",
+          "type": "world_fact_changed",
+          "source": "director",
+          "effects": [
+            {
+              "kind": "set_fact",
+              "target_id": "fact_1",
+              "payload": {
+                "subject_id": {"kind": "entity_ref", "raw": "tower"},
+                "predicate": {"kind": "string", "raw": "status"},
+                "value": {"kind": "string", "raw": "sealed"}
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "reconcile_1",
+      "kind": "reconcile",
+      "cases": [
+        {
+          "event_id": "event_reconcile_1",
+          "target_memory_id": "memory_1",
+          "when_truth_status": "unknown",
+          "truth_status": "disputed",
+          "confidence_delta": -0.5
+        }
+      ]
+    }
+  ]
+}`
+	if err := os.WriteFile(configPath, []byte(configJSON), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Run(ctx, []string{
+		"step-config",
+		"--workspace", workspace,
+		"--world-id", "test_world",
+		"--config-file", configPath,
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("Run exit code = %d, stderr=%s", code, stderr.String())
+	}
+
+	world, err := st.LoadSnapshot(ctx, "test_world")
+	if err != nil {
+		t.Fatalf("LoadSnapshot returned error: %v", err)
+	}
+	if len(world.Facts) != 1 || world.Facts[0].ID != "fact_1" {
+		t.Fatalf("script fact not persisted: %#v", world.Facts)
+	}
+	if len(world.Memory) != 1 || world.Memory[0].TruthStatus != model.TruthStatusDisputed {
+		t.Fatalf("reconcile memory not persisted: %#v", world.Memory)
+	}
+	if len(world.EventLog) != 2 || world.EventLog[0].ID != "event_script_1" || world.EventLog[1].ID != "event_reconcile_1" {
+		t.Fatalf("configured events not persisted in order: %#v", world.EventLog)
+	}
+	if want := "applied 2 configured events to world test_world\n"; stdout.String() != want {
+		t.Fatalf("stdout = %q, want %q", stdout.String(), want)
+	}
+}
+
 func writeTestJSON(t *testing.T, path string, v any) {
 	t.Helper()
 	data, err := json.Marshal(v)
