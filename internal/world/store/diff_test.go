@@ -55,8 +55,11 @@ func TestDiffWorldsEntityChanges(t *testing.T) {
 	if len(d.Entities.Removed) != 1 || d.Entities.Removed[0] != "e2" {
 		t.Errorf("removed = %v, want [e2]", d.Entities.Removed)
 	}
-	if len(d.Entities.Changed) != 1 || d.Entities.Changed[0] != "e1" {
+	if len(d.Entities.Changed) != 1 || d.Entities.Changed[0].ID != "e1" {
 		t.Errorf("changed = %v, want [e1]", d.Entities.Changed)
+	}
+	if len(d.Entities.Changed[0].Fields) == 0 {
+		t.Error("expected field-level deltas for changed entity")
 	}
 }
 
@@ -162,6 +165,166 @@ func TestDiffWorldsEmptyCollections(t *testing.T) {
 	}
 	if d.Threads.Added == nil || d.Threads.Removed == nil || d.Threads.StatusChanged == nil {
 		t.Fatal("threads diff slices should be non-nil")
+	}
+}
+
+func TestDiffWorldsEntityFieldDeltas(t *testing.T) {
+	t.Parallel()
+
+	a := model.World{
+		ID: "a", Name: "A",
+		Entities: map[model.EntityID]model.Entity{
+			"e1": {ID: "e1", Type: "character", Name: "Alice", Description: "A girl", Tags: []string{"brave"}},
+		},
+	}
+	b := model.World{
+		ID: "b", Name: "B",
+		Entities: map[model.EntityID]model.Entity{
+			"e1": {ID: "e1", Type: "character", Name: "Alice", Description: "A warrior", Tags: []string{"brave", "strong"}},
+		},
+	}
+
+	d := DiffWorlds(a, b)
+	if len(d.Entities.Changed) != 1 {
+		t.Fatalf("changed = %d, want 1", len(d.Entities.Changed))
+	}
+	ic := d.Entities.Changed[0]
+	if ic.ID != "e1" {
+		t.Errorf("id = %q, want e1", ic.ID)
+	}
+	fieldNames := make(map[string]bool)
+	for _, fd := range ic.Fields {
+		fieldNames[fd.Field] = true
+	}
+	if !fieldNames["description"] {
+		t.Error("expected description field delta")
+	}
+	if !fieldNames["tags"] {
+		t.Error("expected tags field delta")
+	}
+	if fieldNames["name"] || fieldNames["type"] {
+		t.Error("name/type did not change, should not appear")
+	}
+}
+
+func TestDiffWorldsFactChanges(t *testing.T) {
+	t.Parallel()
+
+	a := model.World{
+		ID: "a", Name: "A",
+		Facts: []model.Fact{
+			{ID: "f1", SubjectID: "e1", Predicate: "age", Value: model.Value{Kind: "number", Raw: 25}},
+			{ID: "f2", SubjectID: "e1", Predicate: "title"},
+		},
+	}
+	b := model.World{
+		ID: "b", Name: "B",
+		Facts: []model.Fact{
+			{ID: "f1", SubjectID: "e1", Predicate: "age", Value: model.Value{Kind: "number", Raw: 30}},
+			{ID: "f3", SubjectID: "e2", Predicate: "rank"},
+		},
+	}
+
+	d := DiffWorlds(a, b)
+	if len(d.Facts.Added) != 1 || d.Facts.Added[0] != "f3" {
+		t.Errorf("facts added = %v, want [f3]", d.Facts.Added)
+	}
+	if len(d.Facts.Removed) != 1 || d.Facts.Removed[0] != "f2" {
+		t.Errorf("facts removed = %v, want [f2]", d.Facts.Removed)
+	}
+	if len(d.Facts.Changed) != 1 || d.Facts.Changed[0].ID != "f1" {
+		t.Errorf("facts changed = %v, want [f1]", d.Facts.Changed)
+	}
+	found := false
+	for _, fd := range d.Facts.Changed[0].Fields {
+		if fd.Field == "value" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected value field delta for f1")
+	}
+}
+
+func TestDiffWorldsRelationChanges(t *testing.T) {
+	t.Parallel()
+
+	a := model.World{
+		ID: "a", Name: "A",
+		Relations: []model.Relation{
+			{ID: "r1", Type: "friend", SourceID: "e1", TargetID: "e2"},
+		},
+	}
+	b := model.World{
+		ID: "b", Name: "B",
+		Relations: []model.Relation{
+			{ID: "r1", Type: "enemy", SourceID: "e1", TargetID: "e2"},
+		},
+	}
+
+	d := DiffWorlds(a, b)
+	if len(d.Relations.Changed) != 1 || d.Relations.Changed[0].ID != "r1" {
+		t.Fatalf("relations changed = %v, want [r1]", d.Relations.Changed)
+	}
+	if d.Relations.Changed[0].Fields[0].Old != "friend" || d.Relations.Changed[0].Fields[0].New != "enemy" {
+		t.Errorf("field delta = %+v", d.Relations.Changed[0].Fields[0])
+	}
+}
+
+func TestDiffWorldsMemoryChanges(t *testing.T) {
+	t.Parallel()
+
+	a := model.World{
+		ID: "a", Name: "A",
+		Memory: []model.MemoryRecord{
+			{ID: "m1", Kind: "observation", Content: "saw fire", TruthStatus: "believed", Importance: 0.5},
+		},
+	}
+	b := model.World{
+		ID: "b", Name: "B",
+		Memory: []model.MemoryRecord{
+			{ID: "m1", Kind: "observation", Content: "saw dragon fire", TruthStatus: "confirmed", Importance: 0.9},
+		},
+	}
+
+	d := DiffWorlds(a, b)
+	if len(d.Memories.Changed) != 1 || d.Memories.Changed[0].ID != "m1" {
+		t.Fatalf("memories changed = %v, want [m1]", d.Memories.Changed)
+	}
+	fieldNames := make(map[string]bool)
+	for _, fd := range d.Memories.Changed[0].Fields {
+		fieldNames[fd.Field] = true
+	}
+	if !fieldNames["content"] || !fieldNames["truth_status"] || !fieldNames["importance"] {
+		t.Errorf("expected content, truth_status, importance deltas; got fields = %v", d.Memories.Changed[0].Fields)
+	}
+}
+
+func TestDiffWorldsThreadTitleChange(t *testing.T) {
+	t.Parallel()
+
+	a := model.World{
+		ID: "a", Name: "A",
+		Threads: []model.WorldThread{
+			{ID: "t1", Kind: "quest", Title: "Find the gem", Status: "active"},
+		},
+	}
+	b := model.World{
+		ID: "b", Name: "B",
+		Threads: []model.WorldThread{
+			{ID: "t1", Kind: "quest", Title: "Retrieve the lost gem", Status: "active"},
+		},
+	}
+
+	d := DiffWorlds(a, b)
+	if len(d.Threads.StatusChanged) != 0 {
+		t.Errorf("no status change expected, got %v", d.Threads.StatusChanged)
+	}
+	if len(d.Threads.Changed) != 1 || d.Threads.Changed[0].ID != "t1" {
+		t.Fatalf("threads changed = %v, want [t1]", d.Threads.Changed)
+	}
+	if d.Threads.Changed[0].Fields[0].Field != "title" {
+		t.Errorf("field = %q, want title", d.Threads.Changed[0].Fields[0].Field)
 	}
 }
 

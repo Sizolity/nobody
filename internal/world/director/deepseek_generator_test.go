@@ -286,3 +286,78 @@ func TestDeepSeekGeneratorRepairReturnsHTTPError(t *testing.T) {
 		t.Fatal("expected error for 500 response")
 	}
 }
+
+func TestDeepSeekGeneratorLastUsage(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(chatResponse{
+			Choices: []chatChoice{{Message: chatMessage{Content: "ok"}}},
+			Usage:   &chatUsage{PromptTokens: 10, CompletionTokens: 20, TotalTokens: 30},
+		})
+	}))
+	defer srv.Close()
+
+	g := NewDeepSeekGenerator(DeepSeekGeneratorConfig{BaseURL: srv.URL, HTTPClient: srv.Client()})
+
+	if g.LastUsage() != nil {
+		t.Fatal("expected nil before any call")
+	}
+
+	_, err := g.Generate(context.Background(), "sys", "usr")
+	if err != nil {
+		t.Fatalf("Generate error: %v", err)
+	}
+	u := g.LastUsage()
+	if u == nil {
+		t.Fatal("expected non-nil usage after call")
+	}
+	if u.PromptTokens != 10 || u.CompletionTokens != 20 || u.TotalTokens != 30 {
+		t.Errorf("usage = %+v", u)
+	}
+}
+
+func TestDeepSeekGeneratorLastUsageNilWhenNoUsage(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(chatResponse{
+			Choices: []chatChoice{{Message: chatMessage{Content: "ok"}}},
+		})
+	}))
+	defer srv.Close()
+
+	g := NewDeepSeekGenerator(DeepSeekGeneratorConfig{BaseURL: srv.URL, HTTPClient: srv.Client()})
+	_, err := g.Generate(context.Background(), "", "hi")
+	if err != nil {
+		t.Fatalf("Generate error: %v", err)
+	}
+	if g.LastUsage() != nil {
+		t.Error("expected nil when API returns no usage")
+	}
+}
+
+func TestDeepSeekGeneratorRepairTracksUsage(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(chatResponse{
+			Choices: []chatChoice{{Message: chatMessage{Content: "fixed"}}},
+			Usage:   &chatUsage{PromptTokens: 50, CompletionTokens: 15, TotalTokens: 65},
+		})
+	}))
+	defer srv.Close()
+
+	g := NewDeepSeekGenerator(DeepSeekGeneratorConfig{BaseURL: srv.URL, HTTPClient: srv.Client()})
+	_, err := g.GenerateRepair(context.Background(), "sys", "user", "bad", "fix")
+	if err != nil {
+		t.Fatalf("GenerateRepair error: %v", err)
+	}
+	u := g.LastUsage()
+	if u == nil {
+		t.Fatal("expected non-nil usage")
+	}
+	if u.TotalTokens != 65 {
+		t.Errorf("total = %d, want 65", u.TotalTokens)
+	}
+}

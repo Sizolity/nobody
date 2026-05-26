@@ -24,10 +24,11 @@ type DeepSeekGeneratorConfig struct {
 }
 
 type DeepSeekGenerator struct {
-	apiKey  string
-	model   string
-	baseURL string
-	client  *http.Client
+	apiKey    string
+	model     string
+	baseURL   string
+	client    *http.Client
+	lastUsage *TokenUsage
 }
 
 func NewDeepSeekGenerator(cfg DeepSeekGeneratorConfig) *DeepSeekGenerator {
@@ -118,7 +119,23 @@ func (g *DeepSeekGenerator) doChat(ctx context.Context, messages []chatMessage) 
 	if len(chatResp.Choices) == 0 {
 		return "", fmt.Errorf("deepseek api returned 0 choices")
 	}
+
+	if chatResp.Usage != nil {
+		g.lastUsage = &TokenUsage{
+			PromptTokens:     chatResp.Usage.PromptTokens,
+			CompletionTokens: chatResp.Usage.CompletionTokens,
+			TotalTokens:      chatResp.Usage.TotalTokens,
+		}
+	} else {
+		g.lastUsage = nil
+	}
+
 	return chatResp.Choices[0].Message.Content, nil
+}
+
+// LastUsage returns the token usage from the most recent API call, or nil.
+func (g *DeepSeekGenerator) LastUsage() *TokenUsage {
+	return g.lastUsage
 }
 
 type chatRequest struct {
@@ -133,11 +150,18 @@ type chatMessage struct {
 }
 
 type chatResponse struct {
-	Choices []chatChoice `json:"choices"`
+	Choices []chatChoice  `json:"choices"`
+	Usage   *chatUsage    `json:"usage,omitempty"`
 }
 
 type chatChoice struct {
 	Message chatMessage `json:"message"`
+}
+
+type chatUsage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	TotalTokens      int `json:"total_tokens"`
 }
 
 func truncate(b []byte, max int) string {

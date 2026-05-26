@@ -1,6 +1,7 @@
 package store
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/sizolity/nobody/internal/world/model"
@@ -186,5 +187,175 @@ func TestDeepValidateEventLocationBrokenRef(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("missing event location_id issue, got: %+v", report.Issues)
+	}
+}
+
+func TestDeepValidateEntityValidation(t *testing.T) {
+	t.Parallel()
+	w := cleanWorld()
+	w.Entities["bad"] = model.Entity{ID: "bad", Name: "Bad"}
+	report := DeepValidate(w)
+	found := false
+	for _, issue := range report.Issues {
+		if issue.Path == "entities[bad]" && issue.Severity == ValidationError {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("missing entity validation issue, got: %+v", report.Issues)
+	}
+}
+
+func TestDeepValidateThreadValidation(t *testing.T) {
+	t.Parallel()
+	w := cleanWorld()
+	w.Threads = append(w.Threads, model.WorldThread{ID: "t_bad", Title: "Bad", Kind: "invalid_kind", Status: model.ThreadStatusOpen})
+	report := DeepValidate(w)
+	found := false
+	for _, issue := range report.Issues {
+		if issue.Path == "threads[1]" && issue.Severity == ValidationError {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("missing thread validation issue, got: %+v", report.Issues)
+	}
+}
+
+func TestDeepValidateMemoryValidation(t *testing.T) {
+	t.Parallel()
+	w := cleanWorld()
+	w.Memory = append(w.Memory, model.MemoryRecord{
+		ID: "m_bad", Owner: model.MemoryOwner{Kind: "invalid_owner"},
+	})
+	report := DeepValidate(w)
+	found := false
+	for _, issue := range report.Issues {
+		if issue.Path == "memory[1]" && issue.Severity == ValidationError {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("missing memory validation issue, got: %+v", report.Issues)
+	}
+}
+
+func TestDeepValidateEventLogValidation(t *testing.T) {
+	t.Parallel()
+	w := cleanWorld()
+	w.EventLog = append(w.EventLog, model.WorldEvent{ID: "ev_bad"})
+	report := DeepValidate(w)
+	found := false
+	for _, issue := range report.Issues {
+		if issue.Path == "event_log[1]" && issue.Severity == ValidationError {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("missing event_log validation issue, got: %+v", report.Issues)
+	}
+}
+
+func TestDeepValidateQueueItemValidation(t *testing.T) {
+	t.Parallel()
+	w := cleanWorld()
+	w.EventQueue = []model.EventQueueItem{
+		{Event: model.WorldEvent{ID: "q1", Type: "note", Source: "test"}, ErrorPolicy: "bad_policy"},
+	}
+	report := DeepValidate(w)
+	found := false
+	for _, issue := range report.Issues {
+		if issue.Path == "event_queue[0]" && issue.Severity == ValidationError {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("missing queue item validation issue, got: %+v", report.Issues)
+	}
+}
+
+func TestDeepValidateQueueDuplicateIDs(t *testing.T) {
+	t.Parallel()
+	w := cleanWorld()
+	w.EventQueue = []model.EventQueueItem{
+		{Event: model.WorldEvent{ID: "q1", Type: "note", Source: "test"}},
+		{Event: model.WorldEvent{ID: "q1", Type: "note", Source: "test"}},
+	}
+	report := DeepValidate(w)
+	found := false
+	for _, issue := range report.Issues {
+		if issue.Path == "event_queue[1]" && issue.Severity == ValidationError {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("missing queue duplicate ID issue, got: %+v", report.Issues)
+	}
+}
+
+func TestDeepValidateQueueEntityRef(t *testing.T) {
+	t.Parallel()
+	w := cleanWorld()
+	w.EventQueue = []model.EventQueueItem{
+		{Event: model.WorldEvent{ID: "q1", Type: "note", Source: "test", ActorIDs: []model.EntityID{"ghost"}}},
+	}
+	report := DeepValidate(w)
+	found := false
+	for _, issue := range report.Issues {
+		if issue.Path == "event_queue[0].event.actor_ids[0]" && issue.Severity == ValidationWarning {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("missing queue actor ref issue, got: %+v", report.Issues)
+	}
+}
+
+func TestDeepValidateThreadEffectBrokenRef(t *testing.T) {
+	t.Parallel()
+	w := cleanWorld()
+	w.EventLog = append(w.EventLog, model.WorldEvent{
+		ID: "ev2", Type: model.EventTypeThreadChanged, Source: model.EventSourceDirector,
+		Effects: []model.Effect{{Kind: model.EffectUpdateThread, TargetID: "nonexistent_thread"}},
+	})
+	report := DeepValidate(w)
+	found := false
+	for _, issue := range report.Issues {
+		if issue.Path == "event_log[1].effects" && issue.Severity == ValidationWarning {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("missing thread effect ref issue, got: %+v", report.Issues)
+	}
+}
+
+func TestFormatValidationReportClean(t *testing.T) {
+	t.Parallel()
+	report := ValidationReport{WorldID: "w1", Issues: []ValidationIssue{}}
+	text := FormatValidationReport(report)
+	if !strings.Contains(text, "clean") {
+		t.Errorf("expected 'clean':\n%s", text)
+	}
+}
+
+func TestFormatValidationReportWithIssues(t *testing.T) {
+	t.Parallel()
+	report := ValidationReport{
+		WorldID: "w1",
+		Issues: []ValidationIssue{
+			{Severity: ValidationError, Path: "entities[bad]", Message: "type required"},
+			{Severity: ValidationWarning, Path: "memory[0].subject_ids[0]", Message: "nonexistent entity"},
+		},
+	}
+	text := FormatValidationReport(report)
+	if !strings.Contains(text, "1 error(s), 1 warning(s)") {
+		t.Errorf("missing summary:\n%s", text)
+	}
+	if !strings.Contains(text, "type required") {
+		t.Errorf("missing error:\n%s", text)
+	}
+	if !strings.Contains(text, "nonexistent entity") {
+		t.Errorf("missing warning:\n%s", text)
 	}
 }

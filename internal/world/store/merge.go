@@ -87,7 +87,7 @@ func mergeEntities(out *model.World, base, source, target model.World, baseSrc, 
 		out.Entities = make(map[model.EntityID]model.Entity)
 	}
 
-	tgtChangedSet := toSet(baseTgt.Entities.Changed)
+	tgtChangedSet := toSet(ItemChangeIDs(baseTgt.Entities.Changed))
 	tgtRemovedSet := toSet(baseTgt.Entities.Removed)
 
 	for _, id := range baseSrc.Entities.Added {
@@ -98,7 +98,7 @@ func mergeEntities(out *model.World, base, source, target model.World, baseSrc, 
 		}
 	}
 
-	for _, id := range baseSrc.Entities.Changed {
+	for _, id := range ItemChangeIDs(baseSrc.Entities.Changed) {
 		if tgtChangedSet[id] || tgtRemovedSet[id] {
 			report.Conflicts = append(report.Conflicts, MergeConflict{
 				Kind: "entity",

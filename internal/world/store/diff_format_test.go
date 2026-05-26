@@ -5,12 +5,11 @@ import (
 	"testing"
 )
 
-func TestFormatDiffNoChanges(t *testing.T) {
-	t.Parallel()
-	d := WorldDiff{
-		WorldA: "w1", WorldB: "w2",
-		ClockA: 5, ClockB: 5,
-		Entities:  EntityDiff{Added: []string{}, Removed: []string{}, Changed: []string{}},
+func emptyDiff(worldA, worldB string, clockA, clockB int64) WorldDiff {
+	return WorldDiff{
+		WorldA: worldA, WorldB: worldB,
+		ClockA: clockA, ClockB: clockB,
+		Entities:  EntityDiff{Added: []string{}, Removed: []string{}, Changed: []ItemChange{}},
 		Facts:     SliceDiff{Added: []string{}, Removed: []string{}},
 		Relations: SliceDiff{Added: []string{}, Removed: []string{}},
 		Memories:  SliceDiff{Added: []string{}, Removed: []string{}},
@@ -18,7 +17,11 @@ func TestFormatDiffNoChanges(t *testing.T) {
 		Events:    SliceDiff{Added: []string{}, Removed: []string{}},
 		Rules:     SliceDiff{Added: []string{}, Removed: []string{}},
 	}
-	out := FormatDiff(d)
+}
+
+func TestFormatDiffNoChanges(t *testing.T) {
+	t.Parallel()
+	out := FormatDiff(emptyDiff("w1", "w2", 5, 5))
 	if !strings.Contains(out, "no changes") {
 		t.Errorf("expected 'no changes', got:\n%s", out)
 	}
@@ -26,18 +29,7 @@ func TestFormatDiffNoChanges(t *testing.T) {
 
 func TestFormatDiffClockChange(t *testing.T) {
 	t.Parallel()
-	d := WorldDiff{
-		WorldA: "w1", WorldB: "w2",
-		ClockA: 3, ClockB: 7,
-		Entities:  EntityDiff{Added: []string{}, Removed: []string{}, Changed: []string{}},
-		Facts:     SliceDiff{Added: []string{}, Removed: []string{}},
-		Relations: SliceDiff{Added: []string{}, Removed: []string{}},
-		Memories:  SliceDiff{Added: []string{}, Removed: []string{}},
-		Threads:   ThreadDiff{Added: []string{}, Removed: []string{}, StatusChanged: []ThreadChange{}},
-		Events:    SliceDiff{Added: []string{}, Removed: []string{}},
-		Rules:     SliceDiff{Added: []string{}, Removed: []string{}},
-	}
-	out := FormatDiff(d)
+	out := FormatDiff(emptyDiff("w1", "w2", 3, 7))
 	if !strings.Contains(out, "clock: 3 → 7") {
 		t.Errorf("expected clock line, got:\n%s", out)
 	}
@@ -45,20 +37,11 @@ func TestFormatDiffClockChange(t *testing.T) {
 
 func TestFormatDiffEntityChanges(t *testing.T) {
 	t.Parallel()
-	d := WorldDiff{
-		WorldA: "w1", WorldB: "w2",
-		ClockA: 1, ClockB: 1,
-		Entities: EntityDiff{
-			Added:   []string{"char_new"},
-			Removed: []string{"char_gone"},
-			Changed: []string{"char_mod"},
-		},
-		Facts:     SliceDiff{Added: []string{}, Removed: []string{}},
-		Relations: SliceDiff{Added: []string{}, Removed: []string{}},
-		Memories:  SliceDiff{Added: []string{}, Removed: []string{}},
-		Threads:   ThreadDiff{Added: []string{}, Removed: []string{}, StatusChanged: []ThreadChange{}},
-		Events:    SliceDiff{Added: []string{}, Removed: []string{}},
-		Rules:     SliceDiff{Added: []string{}, Removed: []string{}},
+	d := emptyDiff("w1", "w2", 1, 1)
+	d.Entities = EntityDiff{
+		Added:   []string{"char_new"},
+		Removed: []string{"char_gone"},
+		Changed: []ItemChange{{ID: "char_mod", Fields: []FieldDelta{{Field: "name", Old: "Old", New: "New"}}}},
 	}
 	out := FormatDiff(d)
 	if !strings.Contains(out, "+ entity char_new") {
@@ -70,6 +53,9 @@ func TestFormatDiffEntityChanges(t *testing.T) {
 	if !strings.Contains(out, "~ entity char_mod") {
 		t.Errorf("missing changed entity:\n%s", out)
 	}
+	if !strings.Contains(out, "name: Old → New") {
+		t.Errorf("missing field delta:\n%s", out)
+	}
 	if strings.Contains(out, "no changes") {
 		t.Error("should not say 'no changes'")
 	}
@@ -77,20 +63,11 @@ func TestFormatDiffEntityChanges(t *testing.T) {
 
 func TestFormatDiffThreadStatusChange(t *testing.T) {
 	t.Parallel()
-	d := WorldDiff{
-		WorldA: "w1", WorldB: "w2",
-		ClockA: 1, ClockB: 1,
-		Entities:  EntityDiff{Added: []string{}, Removed: []string{}, Changed: []string{}},
-		Facts:     SliceDiff{Added: []string{}, Removed: []string{}},
-		Relations: SliceDiff{Added: []string{}, Removed: []string{}},
-		Memories:  SliceDiff{Added: []string{}, Removed: []string{}},
-		Threads: ThreadDiff{
-			Added:         []string{"t_new"},
-			Removed:       []string{},
-			StatusChanged: []ThreadChange{{ID: "t1", StatusA: "active", StatusB: "resolved"}},
-		},
-		Events: SliceDiff{Added: []string{}, Removed: []string{}},
-		Rules:  SliceDiff{Added: []string{}, Removed: []string{}},
+	d := emptyDiff("w1", "w2", 1, 1)
+	d.Threads = ThreadDiff{
+		Added:         []string{"t_new"},
+		Removed:       []string{},
+		StatusChanged: []ThreadChange{{ID: "t1", StatusA: "active", StatusB: "resolved"}},
 	}
 	out := FormatDiff(d)
 	if !strings.Contains(out, "+ thread t_new") {
@@ -103,17 +80,11 @@ func TestFormatDiffThreadStatusChange(t *testing.T) {
 
 func TestFormatDiffSliceCollections(t *testing.T) {
 	t.Parallel()
-	d := WorldDiff{
-		WorldA: "w1", WorldB: "w2",
-		ClockA: 1, ClockB: 1,
-		Entities:  EntityDiff{Added: []string{}, Removed: []string{}, Changed: []string{}},
-		Facts:     SliceDiff{Added: []string{"f_new"}, Removed: []string{}},
-		Relations: SliceDiff{Added: []string{}, Removed: []string{"r_gone"}},
-		Memories:  SliceDiff{Added: []string{"m_new"}, Removed: []string{}},
-		Threads:   ThreadDiff{Added: []string{}, Removed: []string{}, StatusChanged: []ThreadChange{}},
-		Events:    SliceDiff{Added: []string{"ev_new"}, Removed: []string{}},
-		Rules:     SliceDiff{Added: []string{}, Removed: []string{}},
-	}
+	d := emptyDiff("w1", "w2", 1, 1)
+	d.Facts = SliceDiff{Added: []string{"f_new"}, Removed: []string{}}
+	d.Relations = SliceDiff{Added: []string{}, Removed: []string{"r_gone"}}
+	d.Memories = SliceDiff{Added: []string{"m_new"}, Removed: []string{}}
+	d.Events = SliceDiff{Added: []string{"ev_new"}, Removed: []string{}}
 	out := FormatDiff(d)
 	if !strings.Contains(out, "+ facts f_new") {
 		t.Errorf("missing facts:\n%s", out)
@@ -131,18 +102,58 @@ func TestFormatDiffSliceCollections(t *testing.T) {
 
 func TestFormatDiffHeader(t *testing.T) {
 	t.Parallel()
-	d := WorldDiff{
-		WorldA: "alpha", WorldB: "beta",
-		Entities:  EntityDiff{Added: []string{}, Removed: []string{}, Changed: []string{}},
-		Facts:     SliceDiff{Added: []string{}, Removed: []string{}},
-		Relations: SliceDiff{Added: []string{}, Removed: []string{}},
-		Memories:  SliceDiff{Added: []string{}, Removed: []string{}},
-		Threads:   ThreadDiff{Added: []string{}, Removed: []string{}, StatusChanged: []ThreadChange{}},
-		Events:    SliceDiff{Added: []string{}, Removed: []string{}},
-		Rules:     SliceDiff{Added: []string{}, Removed: []string{}},
-	}
-	out := FormatDiff(d)
+	out := FormatDiff(emptyDiff("alpha", "beta", 0, 0))
 	if !strings.HasPrefix(out, "diff alpha → beta\n") {
 		t.Errorf("unexpected header:\n%s", out)
+	}
+}
+
+func TestFormatDiffFieldDeltas(t *testing.T) {
+	t.Parallel()
+	d := emptyDiff("w1", "w2", 1, 2)
+	d.Facts = SliceDiff{
+		Added: []string{}, Removed: []string{},
+		Changed: []ItemChange{
+			{ID: "f1", Fields: []FieldDelta{
+				{Field: "value", Old: "10 gold", New: "25 gold"},
+			}},
+		},
+	}
+	d.Memories = SliceDiff{
+		Added: []string{}, Removed: []string{},
+		Changed: []ItemChange{
+			{ID: "m1", Fields: []FieldDelta{
+				{Field: "truth_status", Old: "believed", New: "confirmed"},
+				{Field: "importance", Old: "0.50", New: "0.90"},
+			}},
+		},
+	}
+	out := FormatDiff(d)
+	if !strings.Contains(out, "~ facts f1") {
+		t.Errorf("missing changed fact:\n%s", out)
+	}
+	if !strings.Contains(out, "value: 10 gold → 25 gold") {
+		t.Errorf("missing fact field delta:\n%s", out)
+	}
+	if !strings.Contains(out, "~ memories m1") {
+		t.Errorf("missing changed memory:\n%s", out)
+	}
+	if !strings.Contains(out, "truth_status: believed → confirmed") {
+		t.Errorf("missing memory field delta:\n%s", out)
+	}
+}
+
+func TestFormatDiffEmptyFieldValue(t *testing.T) {
+	t.Parallel()
+	d := emptyDiff("w1", "w2", 1, 1)
+	d.Entities = EntityDiff{
+		Added: []string{}, Removed: []string{},
+		Changed: []ItemChange{
+			{ID: "e1", Fields: []FieldDelta{{Field: "description", Old: "", New: "A hero"}}},
+		},
+	}
+	out := FormatDiff(d)
+	if !strings.Contains(out, "(empty) → A hero") {
+		t.Errorf("missing empty placeholder:\n%s", out)
 	}
 }

@@ -42,8 +42,9 @@ func formatEntityDiff(b *strings.Builder, d EntityDiff) int {
 		fmt.Fprintf(b, "  - entity %s\n", id)
 		n++
 	}
-	for _, id := range d.Changed {
-		fmt.Fprintf(b, "  ~ entity %s\n", id)
+	for _, ic := range d.Changed {
+		fmt.Fprintf(b, "  ~ entity %s\n", ic.ID)
+		formatFieldDeltas(b, ic.Fields)
 		n++
 	}
 	return n
@@ -57,6 +58,11 @@ func formatSliceDiff(b *strings.Builder, collection string, d SliceDiff) int {
 	}
 	for _, id := range d.Removed {
 		fmt.Fprintf(b, "  - %s %s\n", collection, id)
+		n++
+	}
+	for _, ic := range d.Changed {
+		fmt.Fprintf(b, "  ~ %s %s\n", collection, ic.ID)
+		formatFieldDeltas(b, ic.Fields)
 		n++
 	}
 	return n
@@ -76,5 +82,24 @@ func formatThreadDiff(b *strings.Builder, d ThreadDiff) int {
 		fmt.Fprintf(b, "  ~ thread %s: %s → %s\n", tc.ID, tc.StatusA, tc.StatusB)
 		n++
 	}
+	for _, ic := range d.Changed {
+		fmt.Fprintf(b, "  ~ thread %s\n", ic.ID)
+		formatFieldDeltas(b, ic.Fields)
+		n++
+	}
 	return n
+}
+
+func formatFieldDeltas(b *strings.Builder, fields []FieldDelta) {
+	for _, fd := range fields {
+		old := fd.Old
+		if old == "" {
+			old = "(empty)"
+		}
+		nw := fd.New
+		if nw == "" {
+			nw = "(empty)"
+		}
+		fmt.Fprintf(b, "      %s: %s → %s\n", fd.Field, old, nw)
+	}
 }

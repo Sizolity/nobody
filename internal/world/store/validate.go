@@ -2,6 +2,7 @@ package store
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/sizolity/nobody/internal/world/model"
 )
@@ -159,7 +160,87 @@ func DeepValidate(w model.World) ValidationReport {
 		}
 	}
 
-	_ = threadSet
+	for id, e := range w.Entities {
+		if err := e.Validate(); err != nil {
+			report.Issues = append(report.Issues, ValidationIssue{
+				Severity: ValidationError,
+				Path:     fmt.Sprintf("entities[%s]", id),
+				Message:  err.Error(),
+			})
+		}
+	}
+
+	for i, th := range w.Threads {
+		if err := th.Validate(); err != nil {
+			report.Issues = append(report.Issues, ValidationIssue{
+				Severity: ValidationError,
+				Path:     fmt.Sprintf("threads[%d]", i),
+				Message:  err.Error(),
+			})
+		}
+	}
+
+	for i, mem := range w.Memory {
+		if err := mem.Validate(); err != nil {
+			report.Issues = append(report.Issues, ValidationIssue{
+				Severity: ValidationError,
+				Path:     fmt.Sprintf("memory[%d]", i),
+				Message:  err.Error(),
+			})
+		}
+	}
+
+	for i, ev := range w.EventLog {
+		if err := ev.Validate(); err != nil {
+			report.Issues = append(report.Issues, ValidationIssue{
+				Severity: ValidationError,
+				Path:     fmt.Sprintf("event_log[%d]", i),
+				Message:  err.Error(),
+			})
+		}
+	}
+
+	checkDuplicateSliceIDs(&report, "event_queue", queueEventIDSlice(w.EventQueue))
+	for i, item := range w.EventQueue {
+		path := fmt.Sprintf("event_queue[%d]", i)
+		if err := item.Validate(); err != nil {
+			report.Issues = append(report.Issues, ValidationIssue{
+				Severity: ValidationError, Path: path, Message: err.Error(),
+			})
+		}
+		for j, aid := range item.Event.ActorIDs {
+			if !entitySet[aid] {
+				report.Issues = append(report.Issues, ValidationIssue{
+					Severity: ValidationWarning,
+					Path:     fmt.Sprintf("%s.event.actor_ids[%d]", path, j),
+					Message:  fmt.Sprintf("references non-existent entity %q", aid),
+				})
+			}
+		}
+		for j, tid := range item.Event.TargetIDs {
+			if !entitySet[tid] {
+				report.Issues = append(report.Issues, ValidationIssue{
+					Severity: ValidationWarning,
+					Path:     fmt.Sprintf("%s.event.target_ids[%d]", path, j),
+					Message:  fmt.Sprintf("references non-existent entity %q", tid),
+				})
+			}
+		}
+	}
+
+	for i, ev := range w.EventLog {
+		for _, eff := range ev.Effects {
+			if eff.Kind == model.EffectUpdateThread || eff.Kind == model.EffectCloseThread {
+				if !threadSet[model.ThreadID(eff.TargetID)] {
+					report.Issues = append(report.Issues, ValidationIssue{
+						Severity: ValidationWarning,
+						Path:     fmt.Sprintf("event_log[%d].effects", i),
+						Message:  fmt.Sprintf("thread effect references non-existent thread %q", eff.TargetID),
+					})
+				}
+			}
+		}
+	}
 
 	return report
 }
@@ -244,4 +325,44 @@ func ruleIDSlice(rules []model.Rule) []string {
 		out[i] = string(r.ID)
 	}
 	return out
+}
+
+func queueEventIDSlice(items []model.EventQueueItem) []string {
+	out := make([]string, len(items))
+	for i, item := range items {
+		out[i] = string(item.Event.ID)
+	}
+	return out
+}
+
+// FormatValidationReport returns a human-readable text report.
+func FormatValidationReport(r ValidationReport) string {
+	if r.IsClean() {
+		return fmt.Sprintf("World %s: clean — no issues found.\n", r.WorldID)
+	}
+	errors := r.ErrorCount()
+	warnings := len(r.Issues) - errors
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "World %s: %d error(s), %d warning(s)\n\n", r.WorldID, errors, warnings)
+
+	if errors > 0 {
+		b.WriteString("## Errors\n\n")
+		for _, issue := range r.Issues {
+			if issue.Severity == ValidationError {
+				fmt.Fprintf(&b, "  ✗ %s: %s\n", issue.Path, issue.Message)
+			}
+		}
+		b.WriteString("\n")
+	}
+	if warnings > 0 {
+		b.WriteString("## Warnings\n\n")
+		for _, issue := range r.Issues {
+			if issue.Severity == ValidationWarning {
+				fmt.Fprintf(&b, "  ! %s: %s\n", issue.Path, issue.Message)
+			}
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
 }
