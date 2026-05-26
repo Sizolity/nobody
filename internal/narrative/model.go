@@ -130,7 +130,7 @@ type NarrativeEvent struct {
 	Type           string            `json:"type"`
 	Summary        string            `json:"summary"`
 	ParticipantIDs []string          `json:"participant_ids,omitempty"`
-	Effects        map[string]string `json:"effects,omitempty"`
+	Effects        map[string]any    `json:"effects,omitempty"`
 	SourceText     string            `json:"source_text,omitempty"`
 	CreatedAt      time.Time         `json:"created_at,omitempty,omitzero"`
 }
