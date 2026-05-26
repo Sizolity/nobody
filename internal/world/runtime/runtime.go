@@ -56,6 +56,30 @@ func (r Runtime) Step(world model.World) (StepResult, error) {
 		result.World = next
 		result.AppliedEvents = append(result.AppliedEvents, item.Event)
 	}
+	result.World.Clock = advanceClock(result.World.Clock)
+	return result, nil
+}
+
+type RunResult struct {
+	World            model.World        `json:"world"`
+	StepsCompleted   int                `json:"steps_completed"`
+	AllAppliedEvents []model.WorldEvent `json:"all_applied_events"`
+}
+
+func (r Runtime) Run(world model.World, steps int) (RunResult, error) {
+	result := RunResult{
+		World:            world,
+		AllAppliedEvents: []model.WorldEvent{},
+	}
+	for i := 0; i < steps; i++ {
+		step, err := r.Step(result.World)
+		if err != nil {
+			return result, fmt.Errorf("step %d: %w", i, err)
+		}
+		result.World = step.World
+		result.AllAppliedEvents = append(result.AllAppliedEvents, step.AppliedEvents...)
+		result.StepsCompleted++
+	}
 	return result, nil
 }
 
@@ -260,6 +284,14 @@ func removeQueueItem(queue []model.EventQueueItem, index int) []model.EventQueue
 	out = append(out, queue[:index]...)
 	out = append(out, queue[index+1:]...)
 	return out
+}
+
+func advanceClock(clock model.WorldClock) model.WorldClock {
+	clock.Sequence++
+	if clock.Current.Kind == model.WorldTimeTick {
+		clock.Current.Tick++
+	}
+	return clock
 }
 
 func (r Runtime) evaluateRules(world model.World, event model.WorldEvent) error {

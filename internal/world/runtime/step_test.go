@@ -309,6 +309,72 @@ func TestRuntimeStepReturnsApplyErrorsWithPriorAppliedEvents(t *testing.T) {
 	}
 }
 
+func TestRuntimeStepAdvancesClockSequence(t *testing.T) {
+	t.Parallel()
+
+	world := model.World{
+		ID:    "world_1",
+		Name:  "World",
+		Clock: model.WorldClock{Sequence: 10},
+	}
+	got, err := NewRuntime(WithoutRules()).Step(world)
+	if err != nil {
+		t.Fatalf("Step returned error: %v", err)
+	}
+	if got.World.Clock.Sequence != 11 {
+		t.Fatalf("Clock.Sequence = %d, want 11", got.World.Clock.Sequence)
+	}
+	if world.Clock.Sequence != 10 {
+		t.Fatalf("input world clock was mutated: %d", world.Clock.Sequence)
+	}
+}
+
+func TestRuntimeStepAdvancesTickClock(t *testing.T) {
+	t.Parallel()
+
+	world := model.World{
+		ID:   "world_1",
+		Name: "World",
+		Clock: model.WorldClock{
+			Current:  model.WorldTime{Kind: model.WorldTimeTick, Tick: 5},
+			Sequence: 0,
+		},
+	}
+	got, err := NewRuntime(WithoutRules()).Step(world)
+	if err != nil {
+		t.Fatalf("Step returned error: %v", err)
+	}
+	if got.World.Clock.Current.Tick != 6 {
+		t.Fatalf("Clock.Current.Tick = %d, want 6", got.World.Clock.Current.Tick)
+	}
+	if got.World.Clock.Sequence != 1 {
+		t.Fatalf("Clock.Sequence = %d, want 1", got.World.Clock.Sequence)
+	}
+}
+
+func TestRuntimeStepDoesNotAdvanceTickForNonTickClock(t *testing.T) {
+	t.Parallel()
+
+	world := model.World{
+		ID:   "world_1",
+		Name: "World",
+		Clock: model.WorldClock{
+			Current:  model.WorldTime{Kind: model.WorldTimeScene, Tick: 3},
+			Sequence: 0,
+		},
+	}
+	got, err := NewRuntime(WithoutRules()).Step(world)
+	if err != nil {
+		t.Fatalf("Step returned error: %v", err)
+	}
+	if got.World.Clock.Current.Tick != 3 {
+		t.Fatalf("Clock.Current.Tick = %d, want 3 (unchanged)", got.World.Clock.Current.Tick)
+	}
+	if got.World.Clock.Sequence != 1 {
+		t.Fatalf("Clock.Sequence = %d, want 1", got.World.Clock.Sequence)
+	}
+}
+
 type errorDirector struct {
 	err error
 }
