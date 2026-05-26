@@ -4,6 +4,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"math/rand"
 
 	"github.com/sizolity/nobody/internal/world/director"
 	"github.com/sizolity/nobody/internal/world/model"
@@ -13,6 +14,7 @@ const (
 	DirectorKindScript     = "script"
 	DirectorKindReconcile  = "reconcile"
 	DirectorKindEventTable = "event_table"
+	DirectorKindRandom     = "random"
 )
 
 type File struct {
@@ -25,6 +27,7 @@ type DirectorConfig struct {
 	Events  []model.WorldEvent         `json:"events,omitempty"`
 	Cases   []director.ReconcileCase   `json:"cases,omitempty"`
 	Entries []director.EventTableEntry `json:"entries,omitempty"`
+	Seed    *int64                     `json:"seed,omitempty"`
 }
 
 func LoadDirectors(data []byte) ([]director.Director, error) {
@@ -66,6 +69,15 @@ func buildDirector(cfg DirectorConfig) (director.Director, error) {
 			return nil, err
 		}
 		return director.NewEventTableDirector(cfg.ID, cfg.Entries), nil
+	case DirectorKindRandom:
+		if err := validateEventTableEntries(cfg.Entries); err != nil {
+			return nil, err
+		}
+		var rng *rand.Rand
+		if cfg.Seed != nil {
+			rng = rand.New(rand.NewSource(*cfg.Seed))
+		}
+		return director.NewRandomDirector(cfg.ID, cfg.Entries, rng), nil
 	default:
 		return nil, fmt.Errorf("unsupported director kind %q", cfg.Kind)
 	}

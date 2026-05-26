@@ -112,10 +112,80 @@ func TestLoadDirectorsBuildsEventTableDirector(t *testing.T) {
 	}
 }
 
+func TestLoadDirectorsBuildsRandomDirector(t *testing.T) {
+	t.Parallel()
+
+	const data = `{
+  "directors": [
+    {
+      "id": "random_1",
+      "kind": "random",
+      "seed": 42,
+      "entries": [
+        {
+          "weight": 1,
+          "event": {"id": "event_1", "type": "note", "source": "director"}
+        },
+        {
+          "weight": 1,
+          "event": {"id": "event_2", "type": "note", "source": "director"}
+        }
+      ]
+    }
+  ]
+}`
+
+	directors, err := LoadDirectors([]byte(data))
+	if err != nil {
+		t.Fatalf("LoadDirectors returned error: %v", err)
+	}
+	if len(directors) != 1 || directors[0].ID() != "random_1" {
+		t.Fatalf("directors mismatch: %#v", directors)
+	}
+	got, err := directors[0].Propose(director.Context{})
+	if err != nil {
+		t.Fatalf("Propose returned error: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("proposal length = %d, want 1", len(got))
+	}
+}
+
+func TestLoadDirectorsBuildsRandomDirectorWithoutSeed(t *testing.T) {
+	t.Parallel()
+
+	const data = `{
+  "directors": [
+    {
+      "id": "random_1",
+      "kind": "random",
+      "entries": [
+        {
+          "weight": 1,
+          "event": {"id": "event_1", "type": "note", "source": "director"}
+        }
+      ]
+    }
+  ]
+}`
+
+	directors, err := LoadDirectors([]byte(data))
+	if err != nil {
+		t.Fatalf("LoadDirectors returned error: %v", err)
+	}
+	got, err := directors[0].Propose(director.Context{})
+	if err != nil {
+		t.Fatalf("Propose returned error: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "event_1" {
+		t.Fatalf("random proposal mismatch: %#v", got)
+	}
+}
+
 func TestLoadDirectorsRejectsUnsupportedKind(t *testing.T) {
 	t.Parallel()
 
-	_, err := LoadDirectors([]byte(`{"directors":[{"id":"random_1","kind":"random"}]}`))
+	_, err := LoadDirectors([]byte(`{"directors":[{"id":"unknown_1","kind":"teleport"}]}`))
 	if err == nil {
 		t.Fatal("LoadDirectors returned nil for unsupported kind")
 	}
@@ -152,6 +222,10 @@ func TestLoadDirectorsRejectsInvalidDirectorConfig(t *testing.T) {
 			name: "invalid event table weight",
 			data: `{"directors":[{"id":"table_1","kind":"event_table","entries":[{"weight":0,"event":{"id":"event_1","type":"note","source":"director"}}]}]}`,
 		},
+		{
+			name: "invalid random entry weight",
+			data: `{"directors":[{"id":"random_1","kind":"random","entries":[{"weight":-1,"event":{"id":"event_1","type":"note","source":"director"}}]}]}`,
+		},
 	}
 
 	for _, tc := range cases {
@@ -166,6 +240,7 @@ func TestLoadDirectorsRejectsInvalidDirectorConfig(t *testing.T) {
 func TestDirectorConfigJSONRoundTrip(t *testing.T) {
 	t.Parallel()
 
+	seed := int64(42)
 	cfg := File{
 		Directors: []DirectorConfig{{
 			ID:   "script_1",
@@ -186,6 +261,18 @@ func TestDirectorConfigJSONRoundTrip(t *testing.T) {
 					Source: model.EventSourceDirector,
 				},
 			}},
+		}, {
+			ID:   "random_1",
+			Kind: DirectorKindRandom,
+			Seed: &seed,
+			Entries: []director.EventTableEntry{{
+				Weight: 1,
+				Event: model.WorldEvent{
+					ID:     "event_3",
+					Type:   model.EventTypeNote,
+					Source: model.EventSourceDirector,
+				},
+			}},
 		}},
 	}
 	data, err := json.Marshal(cfg)
@@ -196,7 +283,10 @@ func TestDirectorConfigJSONRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatalf("Unmarshal returned error: %v", err)
 	}
-	if len(got.Directors) != 2 || got.Directors[0].Kind != DirectorKindScript || got.Directors[1].Kind != DirectorKindEventTable {
-		t.Fatalf("config mismatch: %#v", got)
+	if len(got.Directors) != 3 {
+		t.Fatalf("directors count = %d, want 3", len(got.Directors))
+	}
+	if got.Directors[2].Kind != DirectorKindRandom || got.Directors[2].Seed == nil || *got.Directors[2].Seed != 42 {
+		t.Fatalf("random config mismatch: %#v", got.Directors[2])
 	}
 }
