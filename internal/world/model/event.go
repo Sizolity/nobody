@@ -18,6 +18,8 @@ const (
 	EventTypeNote                = "note"
 	EventTypeMove                = "move"
 	EventTypeInventoryChanged    = "inventory_changed"
+	EventTypeStatsChanged        = "stats_changed"
+	EventTypeActorChanged        = "actor_changed"
 	EventTypeWorldFactChanged    = "world_fact_changed"
 	EventTypeRelationshipChanged = "relationship_changed"
 	EventTypeRemember            = "remember"
