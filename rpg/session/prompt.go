@@ -2,11 +2,10 @@ package session
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
-	"github.com/sizolity/nobody/internal/narrative/engine"
 	"github.com/sizolity/nobody/internal/world/model"
-	"github.com/sizolity/nobody/rpg/bridge"
 	"github.com/sizolity/nobody/rpg/rule"
 )
 
@@ -63,9 +62,7 @@ When the player's actions logically reveal new knowledge, use "explore_knowledge
 NEVER fabricate entities that don't exist in the world. If the player asks about
 something you cannot see, narrate uncertainty rather than invention.`
 
-func buildSystemPrompt(w model.World, opts bridge.Options, fogEnabled ...bool) string {
-	bundle := bridge.AdaptWorld(w, opts)
-
+func buildSystemPrompt(w model.World, recentEvents int, fogEnabled bool) string {
 	genre := strings.Join(w.Canon.Genre, ", ")
 	tone := strings.Join(w.Canon.Tone, ", ")
 	if genre == "" {
@@ -76,17 +73,17 @@ func buildSystemPrompt(w model.World, opts bridge.Options, fogEnabled ...bool) s
 	}
 
 	fogSection := ""
-	if len(fogEnabled) > 0 && fogEnabled[0] {
+	if fogEnabled {
 		fogSection = discoveryProtocol
 	}
 
 	return fmt.Sprintf(dmSystemTemplate,
 		w.Name, genre, tone,
 		buildRulesSection(w.Rules),
-		buildCharactersSection(bundle),
-		buildLocationsSection(bundle),
-		buildEventsSection(bundle),
-		buildThreadsSection(bundle),
+		buildCharactersSection(w.Entities),
+		buildLocationsSection(w.Entities),
+		buildEventsSection(w.EventLog, recentEvents),
+		buildThreadsSection(w.Threads),
 		fogSection,
 	)
 }
@@ -103,68 +100,97 @@ func buildRulesSection(rules []model.Rule) string {
 	return section
 }
 
-func buildCharactersSection(bundle engine.ContextBundle) string {
-	if len(bundle.Characters) == 0 {
+func buildCharactersSection(entities map[model.EntityID]model.Entity) string {
+	chars := sortedEntitiesByType(entities, "character")
+	if len(chars) == 0 {
 		return "No characters present."
 	}
 	var b strings.Builder
-	for _, c := range bundle.Characters {
-		b.WriteString(fmt.Sprintf("- **%s** (ID: %s)", c.Name, c.ID))
-		if c.Role != "" {
-			b.WriteString(fmt.Sprintf(" Role: %s", c.Role))
+	for _, e := range chars {
+		b.WriteString(fmt.Sprintf("- **%s** (ID: %s)", e.Name, e.ID))
+		if len(e.Tags) > 0 {
+			b.WriteString(fmt.Sprintf(" [%s]", strings.Join(e.Tags, ", ")))
 		}
-		if len(c.Traits) > 0 {
-			b.WriteString(fmt.Sprintf(" [%s]", strings.Join(c.Traits, ", ")))
-		}
-		if len(c.Goals) > 0 {
-			b.WriteString(fmt.Sprintf(" Goals: %s", strings.Join(c.Goals, "; ")))
+		if actor, ok := e.ActorComponent(); ok && len(actor.Goals) > 0 {
+			b.WriteString(fmt.Sprintf(" Goals: %s", strings.Join(actor.Goals, "; ")))
 		}
 		b.WriteString("\n")
 	}
 	return b.String()
 }
 
-func buildLocationsSection(bundle engine.ContextBundle) string {
-	if len(bundle.Locations) == 0 {
+func buildLocationsSection(entities map[model.EntityID]model.Entity) string {
+	locs := sortedEntitiesByType(entities, "location")
+	if len(locs) == 0 {
 		return "No locations defined."
 	}
 	var b strings.Builder
-	for _, l := range bundle.Locations {
-		b.WriteString(fmt.Sprintf("- **%s** (ID: %s)", l.Name, l.ID))
-		if l.Description != "" {
-			b.WriteString(fmt.Sprintf(": %s", l.Description))
+	for _, e := range locs {
+		b.WriteString(fmt.Sprintf("- **%s** (ID: %s)", e.Name, e.ID))
+		if e.Description != "" {
+			b.WriteString(fmt.Sprintf(": %s", e.Description))
 		}
 		b.WriteString("\n")
 	}
 	return b.String()
 }
 
-func buildEventsSection(bundle engine.ContextBundle) string {
-	if len(bundle.Events) == 0 {
+func buildEventsSection(events []model.WorldEvent, limit int) string {
+	if len(events) == 0 {
 		return "No recent events."
 	}
-	var b strings.Builder
-	limit := len(bundle.Events)
-	if limit > 10 {
-		bundle.Events = bundle.Events[limit-10:]
+	if limit > 0 && len(events) > limit {
+		events = events[len(events)-limit:]
 	}
-	for _, e := range bundle.Events {
-		b.WriteString(fmt.Sprintf("- [%s] %s\n", e.Type, e.Summary))
+	if len(events) > 10 {
+		events = events[len(events)-10:]
+	}
+	var b strings.Builder
+	for _, e := range events {
+		summary := e.Description
+		if summary == "" {
+			summary = e.Intent
+		}
+		if summary == "" {
+			summary = string(e.Type)
+		}
+		b.WriteString(fmt.Sprintf("- [%s] %s\n", e.Type, summary))
 	}
 	return b.String()
 }
 
-func buildThreadsSection(bundle engine.ContextBundle) string {
-	if len(bundle.Graph.Nodes) == 0 {
+func buildThreadsSection(threads []model.WorldThread) string {
+	active := make([]model.WorldThread, 0, len(threads))
+	for _, th := range threads {
+		switch th.Status {
+		case model.ThreadStatusResolved, model.ThreadStatusFailed, model.ThreadStatusAbandoned:
+			continue
+		}
+		active = append(active, th)
+	}
+	if len(active) == 0 {
 		return "No active story threads."
 	}
 	var b strings.Builder
-	for _, n := range bundle.Graph.Nodes {
+	for _, th := range active {
 		marker := " "
-		if n.ID == bundle.Graph.CurrentNodeID {
+		if th.Status == model.ThreadStatusActive {
 			marker = "→"
 		}
-		b.WriteString(fmt.Sprintf("%s [%s] %s: %s\n", marker, n.Status, n.Type, n.Goal))
+		b.WriteString(fmt.Sprintf("%s [%s] %s: %s\n", marker, th.Status, th.Kind, th.Title))
 	}
 	return b.String()
+}
+
+func sortedEntitiesByType(entities map[model.EntityID]model.Entity, entityType string) []model.Entity {
+	out := make([]model.Entity, 0)
+	for _, e := range entities {
+		if e.Type == entityType {
+			out = append(out, e)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].ID < out[j].ID
+	})
+	return out
 }

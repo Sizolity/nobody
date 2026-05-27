@@ -160,9 +160,7 @@ func runStepConfig(ctx context.Context, args []string, stdout, stderr io.Writer)
 		fmt.Fprintln(stderr, "step-config requires --workspace, --world-id, and --config-file")
 		return 2
 	}
-	directors, err := directorconfig.LoadDirectorsFromFile(*configFile, directorconfig.LoadOptions{
-		GeneratorFactory: configGeneratorFactory,
-	})
+	directors, err := directorconfig.LoadDirectorsFromFile(*configFile)
 	if err != nil {
 		fmt.Fprintf(stderr, "load director config failed: %v\n", err)
 		return 1
@@ -180,42 +178,6 @@ func runStepConfig(ctx context.Context, args []string, stdout, stderr io.Writer)
 	return 0
 }
 
-func runStepLLM(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	fs := newFlagSet("step-llm", stderr)
-	workspace := fs.String("workspace", "", "workspace directory")
-	worldID := fs.String("world-id", "", "world id")
-	provider := fs.String("provider", "deepseek", "LLM provider (deepseek)")
-	modelName := fs.String("model", "", "model name (default per provider)")
-	systemPrompt := fs.String("system-prompt", "", "system prompt for the LLM director")
-	if err := fs.Parse(args); err != nil {
-		return 2
-	}
-	if *workspace == "" || *worldID == "" {
-		fmt.Fprintln(stderr, "step-llm requires --workspace and --world-id")
-		return 2
-	}
-	gen, err := cliGeneratorFactory(*provider, *modelName)
-	if err != nil {
-		fmt.Fprintf(stderr, "create generator failed: %v\n", err)
-		return 1
-	}
-	d := director.NewLLMDirector("cli_llm", director.LLMDirectorConfig{
-		SystemPrompt: *systemPrompt,
-		Generator:    gen,
-	})
-	r := runner.New(
-		store.NewFileStore(*workspace),
-		worldruntime.WithDirectors(d),
-	)
-	result, err := r.Step(ctx, *worldID)
-	if err != nil {
-		fmt.Fprintf(stderr, "step-llm failed: %v\n", err)
-		return 1
-	}
-	fmt.Fprintf(stdout, "applied %d LLM events to world %s\n", len(result.AppliedEvents), result.World.ID)
-	return 0
-}
-
 func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := newFlagSet("run", stderr)
 	workspace := fs.String("workspace", "", "workspace directory")
@@ -229,9 +191,7 @@ func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "run requires --workspace, --world-id, and --config-file")
 		return 2
 	}
-	directors, err := directorconfig.LoadDirectorsFromFile(*configFile, directorconfig.LoadOptions{
-		GeneratorFactory: configGeneratorFactory,
-	})
+	directors, err := directorconfig.LoadDirectorsFromFile(*configFile)
 	if err != nil {
 		fmt.Fprintf(stderr, "load director config failed: %v\n", err)
 		return 1

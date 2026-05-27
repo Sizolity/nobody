@@ -12,7 +12,6 @@ import (
 func TestLoadConfigKeepsSharedRuntimeAndIgnoresLegacyProductKeys(t *testing.T) {
 	path := writeConfig(t, `
 model:
-  provider: llamacpp
   name: qwen3.5-custom
   base_url: http://127.0.0.1:18080/v1
   timeout: 45s
@@ -59,44 +58,15 @@ memory:
 	require.Equal(t, cfg.Model.Timeout, cfg.Timeout)
 }
 
-func TestLoadConfigBackfillsLlamacppProviderOptions(t *testing.T) {
+func TestLoadConfigPatchesModelDefaults(t *testing.T) {
 	path := writeConfig(t, `
 model:
-  provider: llamacpp
-  name: qwen3.5-minimal
-  provider_opts:
-    llamacpp:
-      lifecycle: external
+  name: test-model
 `)
-
 	cfg, err := LoadConfig(LoadOptions{ConfigPath: path})
 	require.NoError(t, err)
-
-	opts := cfg.Model.ProviderOpts["llamacpp"]
-	require.Equal(t, "openai_compat", opts["mode"])
-	require.Equal(t, "external", opts["lifecycle"])
-	require.Equal(t, "/health", opts["probe_path"])
-	require.Equal(t, "off", opts["grammar"])
-	require.Contains(t, opts, "embedding")
 	require.Equal(t, "auto", cfg.Model.ToolChoice)
 	require.Equal(t, "text", cfg.Model.ResponseFormat)
-}
-
-func TestLoadConfigRewritesDefaultBaseURLForManagedLlamacpp(t *testing.T) {
-	path := writeConfig(t, `
-model:
-  provider: llamacpp
-  provider_opts:
-    llamacpp:
-      lifecycle: managed
-      managed:
-        port: 18080
-        host: 127.0.0.1
-`)
-
-	cfg, err := LoadConfig(LoadOptions{ConfigPath: path})
-	require.NoError(t, err)
-	require.Equal(t, "http://127.0.0.1:18080/v1", cfg.Model.BaseURL)
 }
 
 func writeConfig(t *testing.T, body string) string {

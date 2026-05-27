@@ -12,7 +12,6 @@ import (
 
 	worldmodel "github.com/sizolity/nobody/internal/world/model"
 	"github.com/sizolity/nobody/internal/world/store"
-	"github.com/sizolity/nobody/rpg/bridge"
 	"github.com/sizolity/nobody/rpg/fog"
 	"github.com/sizolity/nobody/rpg/rule"
 )
@@ -229,10 +228,7 @@ func TestApplyEffects(t *testing.T) {
 
 func TestBuildSystemPrompt(t *testing.T) {
 	_, world := setupTestWorld(t)
-	prompt := buildSystemPrompt(world, bridge.Options{
-		UserInput:    "test input",
-		RecentEvents: 5,
-	})
+	prompt := buildSystemPrompt(world, 5, false)
 	if prompt == "" {
 		t.Fatal("expected non-empty system prompt")
 	}
@@ -252,10 +248,7 @@ func TestBuildSystemPrompt(t *testing.T) {
 
 func TestBuildSystemPrompt_WithFog(t *testing.T) {
 	_, world := setupTestWorld(t)
-	prompt := buildSystemPrompt(world, bridge.Options{
-		UserInput:    "test input",
-		RecentEvents: 5,
-	}, true)
+	prompt := buildSystemPrompt(world, 5, true)
 	if !containsStr(prompt, "Discovery Protocol") {
 		t.Error("fog enabled: should contain discovery protocol")
 	}

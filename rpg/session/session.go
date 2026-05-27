@@ -17,7 +17,6 @@ import (
 
 	worldmodel "github.com/sizolity/nobody/internal/world/model"
 	"github.com/sizolity/nobody/internal/world/store"
-	"github.com/sizolity/nobody/rpg/bridge"
 	"github.com/sizolity/nobody/rpg/fog"
 	"github.com/sizolity/nobody/rpg/tools"
 )
@@ -129,10 +128,7 @@ func (s *Session) RunBeat(ctx context.Context, input BeatInput) (BeatOutput, err
 		visibleWorld = fog.FilterWorld(world, disclosure)
 	}
 
-	systemPrompt := buildSystemPrompt(visibleWorld, bridge.Options{
-		UserInput:    input.UserInput,
-		RecentEvents: input.RecentEvents,
-	}, s.fogEnabled)
+	systemPrompt := buildSystemPrompt(visibleWorld, input.RecentEvents, s.fogEnabled)
 
 	agent, err := react.NewAgent(ctx, &react.AgentConfig{
 		ToolCallingModel: s.chatModel,

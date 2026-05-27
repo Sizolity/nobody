@@ -1,16 +1,13 @@
 package devcli
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"os"
-	"strings"
 
-	"github.com/sizolity/nobody/internal/world/director"
 	rpgcli "github.com/sizolity/nobody/rpg/cli"
 )
 
@@ -30,8 +27,6 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runStepReconcile(ctx, args[1:], stdout, stderr)
 	case "step-config":
 		return runStepConfig(ctx, args[1:], stdout, stderr)
-	case "step-llm":
-		return runStepLLM(ctx, args[1:], stdout, stderr)
 	case "run":
 		return runRun(ctx, args[1:], stdout, stderr)
 	case "checkpoint":
@@ -84,10 +79,6 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return rpgcli.RunManageRule(ctx, args[1:], stdout, stderr)
 	case "manage-queue":
 		return runManageQueue(ctx, args[1:], stdout, stderr)
-	case "beat":
-		return runBeat(ctx, args[1:], stdout, stderr)
-	case "bridge-context":
-		return runBridgeContext(ctx, args[1:], stdout, stderr)
 	case "debug-view":
 		return runDebugView(ctx, args[1:], stdout, stderr)
 	case "narrative-view":
@@ -129,51 +120,3 @@ func readJSONFile(path string, out any) error {
 	return json.Unmarshal(data, out)
 }
 
-type stdinHook struct {
-	scanner *bufio.Scanner
-	stderr  io.Writer
-}
-
-func newStdinHook(stdin io.Reader, stderr io.Writer) *stdinHook {
-	return &stdinHook{scanner: bufio.NewScanner(stdin), stderr: stderr}
-}
-
-func (h *stdinHook) AfterStage(stage, summary string) (string, bool) {
-	fmt.Fprintf(h.stderr, "\n--- %s ---\n%s\n", stage, summary)
-	fmt.Fprintf(h.stderr, "[Enter=continue, 'abort'=stop, or type feedback]: ")
-	if !h.scanner.Scan() {
-		return "", true
-	}
-	line := strings.TrimSpace(h.scanner.Text())
-	if strings.EqualFold(line, "abort") {
-		return "", true
-	}
-	return line, false
-}
-
-// configGeneratorFactory matches the directorconfig.GeneratorFactory signature
-// (no variadic opts). Used by step-config and run where streaming is not needed.
-func configGeneratorFactory(provider, modelName string) (director.TextGenerator, error) {
-	return cliGeneratorFactory(provider, modelName)
-}
-
-func cliGeneratorFactory(provider, modelName string, opts ...director.ProviderGeneratorOption) (director.TextGenerator, error) {
-	if provider == "" {
-		provider = "deepseek"
-	}
-	envKey := providerEnvKey(provider)
-	apiKey := os.Getenv(envKey)
-	if apiKey == "" && envKey != "" {
-		return nil, fmt.Errorf("%s environment variable is required for %s provider", envKey, provider)
-	}
-	return director.NewProviderGenerator(context.Background(), provider, modelName, apiKey, opts...)
-}
-
-func providerEnvKey(provider string) string {
-	switch provider {
-	case "deepseek":
-		return "DEEPSEEK_API_KEY"
-	default:
-		return ""
-	}
-}

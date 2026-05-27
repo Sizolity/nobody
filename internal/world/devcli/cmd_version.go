@@ -205,9 +205,6 @@ func runMerge(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	sourceID := fs.String("source", "", "source branch world id (changes to merge from)")
 	targetID := fs.String("target", "", "target branch world id (merge into)")
 	apply := fs.Bool("apply", false, "save the merged world back to the target")
-	resolveConflicts := fs.Bool("resolve-conflicts", false, "use LLM to resolve conflicts (requires --provider)")
-	provider := fs.String("provider", "deepseek", "LLM provider for conflict resolution")
-	modelName := fs.String("model", "", "model name for conflict resolution")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -242,38 +239,6 @@ func runMerge(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		}
 	}
 
-	type mergeResolutionOutput struct {
-		Pick   string `json:"pick"`
-		ID     string `json:"id"`
-		Kind   string `json:"kind"`
-		Reason string `json:"reason"`
-	}
-
-	var resolutionOutputs []mergeResolutionOutput
-
-	if report.HasConflicts() && *resolveConflicts {
-		gen, genErr := cliGeneratorFactory(*provider, *modelName)
-		if genErr != nil {
-			fmt.Fprintf(stderr, "create generator for conflict resolution: %v\n", genErr)
-			return 1
-		}
-		resolver := store.NewLLMConflictResolver(gen)
-		resolved, resolutions, resolveErr := store.ResolveMergeConflicts(ctx, merged, base, source, target, report.Conflicts, resolver)
-		if resolveErr != nil {
-			fmt.Fprintf(stderr, "conflict resolution failed: %v\n", resolveErr)
-			return 1
-		}
-		merged = resolved
-		for i, res := range resolutions {
-			fmt.Fprintf(stderr, "  resolved [%s] %s → %s (%s)\n", report.Conflicts[i].Kind, report.Conflicts[i].ID, res.Pick, res.Reason)
-			resolutionOutputs = append(resolutionOutputs, mergeResolutionOutput{
-				Pick: res.Pick, ID: report.Conflicts[i].ID, Kind: report.Conflicts[i].Kind, Reason: res.Reason,
-			})
-		}
-		report.Conflicts = []store.MergeConflict{}
-		fmt.Fprintf(stderr, "merge: all conflicts resolved\n")
-	}
-
 	if *apply {
 		if report.HasConflicts() {
 			fmt.Fprintln(stderr, "merge: refusing to apply with unresolved conflicts")
@@ -287,11 +252,10 @@ func runMerge(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	}
 
 	type mergeOutput struct {
-		Report      store.MergeReport      `json:"report"`
-		Resolutions []mergeResolutionOutput `json:"resolutions,omitempty"`
-		Merged      *model.World           `json:"merged,omitempty"`
+		Report store.MergeReport `json:"report"`
+		Merged *model.World      `json:"merged,omitempty"`
 	}
-	out := mergeOutput{Report: report, Resolutions: resolutionOutputs}
+	out := mergeOutput{Report: report}
 	if !*apply {
 		out.Merged = &merged
 	}
