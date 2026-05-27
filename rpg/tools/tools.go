@@ -1,11 +1,17 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math/rand/v2"
+	"sync"
+
+	"github.com/cloudwego/eino/components/tool"
+	"github.com/cloudwego/eino/components/tool/utils"
 
 	"github.com/sizolity/nobody/internal/world/model"
+	"github.com/sizolity/nobody/rpg/fog"
 	"github.com/sizolity/nobody/rpg/rule"
 )
 
@@ -15,29 +21,49 @@ type LookupRulesParams struct {
 }
 
 type UpdateStateParams struct {
-	EntityID string `json:"entity_id" jsonschema:"description=Target entity ID"`
-	Key      string `json:"key" jsonschema:"description=State key to update"`
-	Value    any    `json:"value" jsonschema:"description=New value (string or number or boolean)"`
+	EntityID string `json:"entity_id" jsonschema:"required,description=Target entity ID"`
+	Key      string `json:"key" jsonschema:"required,description=State key to update"`
+	Value    any    `json:"value" jsonschema:"required,description=New value (string or number or boolean)"`
 }
 
 type RollParams struct {
-	Sides    int `json:"sides" jsonschema:"description=Number of sides (e.g. 20 for d20)"`
-	Count    int `json:"count,omitempty" jsonschema:"description=Number of dice,default=1"`
-	Modifier int `json:"modifier,omitempty" jsonschema:"description=Flat modifier added to total,default=0"`
+	Sides    int `json:"sides" jsonschema:"required,description=Number of sides (e.g. 20 for d20)"`
+	Count    int `json:"count,omitempty" jsonschema:"description=Number of dice (default 1)"`
+	Modifier int `json:"modifier,omitempty" jsonschema:"description=Flat modifier added to total (default 0)"`
 }
 
 type GetEntityStateParams struct {
-	EntityID string `json:"entity_id" jsonschema:"description=Entity to inspect"`
+	EntityID string `json:"entity_id" jsonschema:"required,description=Entity to inspect"`
 }
 
-// ToolContext holds state for tool execution within a single beat.
+type ExploreKnowledgeParams struct {
+	TargetID string `json:"target_id" jsonschema:"required,description=Entity or fact ID to reveal"`
+	Level    string `json:"level,omitempty" jsonschema:"description=Target visibility: known or explored (default: explored)"`
+	Piece    string `json:"piece,omitempty" jsonschema:"description=Specific knowledge piece to unlock within an entity"`
+}
+
+// ToolContext holds mutable state for tool execution within a single beat.
+// It is goroutine-safe for use within Eino's tool node.
 type ToolContext struct {
+	mu             sync.Mutex
 	World          model.World
 	PendingEffects []model.Effect
 	Rng            *rand.Rand
+	Disclosure     *fog.DisclosureState // nil = fog disabled
 }
 
-func (tc *ToolContext) LookupRules(params LookupRulesParams) (string, error) {
+// GetPendingEffects returns a copy of accumulated effects (goroutine-safe).
+func (tc *ToolContext) GetPendingEffects() []model.Effect {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	out := make([]model.Effect, len(tc.PendingEffects))
+	copy(out, tc.PendingEffects)
+	return out
+}
+
+func (tc *ToolContext) LookupRules(_ context.Context, params *LookupRulesParams) (string, error) {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
 	rpgRules := rule.FromWorldRules(tc.World.Rules)
 	results := rule.Lookup(rpgRules, rule.LookupFilter{
 		Category: params.Category,
@@ -46,7 +72,9 @@ func (tc *ToolContext) LookupRules(params LookupRulesParams) (string, error) {
 	return rule.FormatRules(results), nil
 }
 
-func (tc *ToolContext) UpdateState(params UpdateStateParams) (string, error) {
+func (tc *ToolContext) UpdateState(_ context.Context, params *UpdateStateParams) (string, error) {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
 	entityID := model.EntityID(params.EntityID)
 	if _, ok := tc.World.Entities[entityID]; !ok {
 		return "", fmt.Errorf("entity %q not found", params.EntityID)
@@ -60,13 +88,14 @@ func (tc *ToolContext) UpdateState(params UpdateStateParams) (string, error) {
 	return fmt.Sprintf("OK: %s.%s = %v", params.EntityID, params.Key, params.Value), nil
 }
 
-func (tc *ToolContext) Roll(params RollParams) (string, error) {
+func (tc *ToolContext) Roll(_ context.Context, params *RollParams) (string, error) {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
 	count := params.Count
 	if count < 1 {
 		count = 1
 	}
-	sides := params.Sides
-	if sides < 1 {
+	if params.Sides < 1 {
 		return "", fmt.Errorf("sides must be >= 1")
 	}
 	rng := tc.Rng
@@ -76,7 +105,7 @@ func (tc *ToolContext) Roll(params RollParams) (string, error) {
 	rolls := make([]int, count)
 	total := params.Modifier
 	for i := range rolls {
-		rolls[i] = rng.IntN(sides) + 1
+		rolls[i] = rng.IntN(params.Sides) + 1
 		total += rolls[i]
 	}
 	result, _ := json.Marshal(map[string]any{
@@ -85,7 +114,9 @@ func (tc *ToolContext) Roll(params RollParams) (string, error) {
 	return string(result), nil
 }
 
-func (tc *ToolContext) GetEntityState(params GetEntityStateParams) (string, error) {
+func (tc *ToolContext) GetEntityState(_ context.Context, params *GetEntityStateParams) (string, error) {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
 	entity, ok := tc.World.Entities[model.EntityID(params.EntityID)]
 	if !ok {
 		return "", fmt.Errorf("entity %q not found", params.EntityID)
@@ -96,6 +127,98 @@ func (tc *ToolContext) GetEntityState(params GetEntityStateParams) (string, erro
 	}
 	data, _ := json.Marshal(out)
 	return string(data), nil
+}
+
+// NewInvokableTools creates Eino InvokableTool instances bound to a ToolContext.
+// These can be passed directly to react.AgentConfig.ToolsConfig.
+func NewInvokableTools(tc *ToolContext) ([]tool.InvokableTool, error) {
+	lookupRules, err := utils.InferTool(
+		"lookup_rules",
+		"Retrieve detailed rules for a specific category. Use when you need mechanics before making decisions.",
+		tc.LookupRules,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("infer lookup_rules: %w", err)
+	}
+
+	updateState, err := utils.InferTool(
+		"update_state",
+		"Apply a validated state change to an entity. Use for precise numeric changes or status transitions.",
+		tc.UpdateState,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("infer update_state: %w", err)
+	}
+
+	roll, err := utils.InferTool(
+		"roll",
+		"Roll dice for randomized outcomes. Returns the numeric result.",
+		tc.Roll,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("infer roll: %w", err)
+	}
+
+	getEntityState, err := utils.InferTool(
+		"get_entity_state",
+		"Read-only inspection of an entity's current state.",
+		tc.GetEntityState,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("infer get_entity_state: %w", err)
+	}
+
+	exploreKnowledge, err := utils.InferTool(
+		"explore_knowledge",
+		"Reveal a hidden entity or fact to make it available in future beats. Call when the player discovers something new through exploration, interaction, or study.",
+		tc.ExploreKnowledge,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("infer explore_knowledge: %w", err)
+	}
+
+	return []tool.InvokableTool{lookupRules, updateState, roll, getEntityState, exploreKnowledge}, nil
+}
+
+func (tc *ToolContext) ExploreKnowledge(_ context.Context, params *ExploreKnowledgeParams) (string, error) {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	if tc.Disclosure == nil {
+		return "fog disabled", nil
+	}
+
+	level := fog.Explored
+	if params.Level == "known" {
+		level = fog.Known
+	}
+
+	action := fog.RevealAction{ToLevel: level, Piece: params.Piece}
+
+	entityID := model.EntityID(params.TargetID)
+	if _, ok := tc.World.Entities[entityID]; ok {
+		action.EntityID = entityID
+	} else {
+		factID := model.FactID(params.TargetID)
+		foundFact := false
+		for _, f := range tc.World.Facts {
+			if f.ID == factID {
+				foundFact = true
+				break
+			}
+		}
+		if foundFact {
+			action.FactID = factID
+		} else {
+			return "", fmt.Errorf("target %q not found as entity or fact", params.TargetID)
+		}
+	}
+
+	fog.Reveal(tc.Disclosure, action)
+
+	if params.Piece != "" {
+		return fmt.Sprintf("unlocked piece %q for %s", params.Piece, params.TargetID), nil
+	}
+	return fmt.Sprintf("revealed %s (level: %s)", params.TargetID, level), nil
 }
 
 func inferValueKind(v any) string {

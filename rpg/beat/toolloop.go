@@ -29,10 +29,10 @@ type ToolResult struct {
 // ExecuteToolCalls processes a batch of tool calls against the given ToolContext.
 // Returns results for each call. Does not fail on individual tool errors —
 // errors are returned as ToolResult with IsError=true.
-func ExecuteToolCalls(_ context.Context, tc *tools.ToolContext, calls []ToolCall) []ToolResult {
+func ExecuteToolCalls(ctx context.Context, tc *tools.ToolContext, calls []ToolCall) []ToolResult {
 	results := make([]ToolResult, 0, len(calls))
 	for _, call := range calls {
-		output, err := dispatchToolCall(tc, call.Name, call.Arguments)
+		output, err := dispatchToolCall(ctx, tc, call.Name, call.Arguments)
 		result := ToolResult{
 			ToolCallID: call.ID,
 			Name:       call.Name,
@@ -50,35 +50,35 @@ func ExecuteToolCalls(_ context.Context, tc *tools.ToolContext, calls []ToolCall
 
 // PendingEffects returns the accumulated effects from tool executions.
 func PendingEffects(tc *tools.ToolContext) []model.Effect {
-	return tc.PendingEffects
+	return tc.GetPendingEffects()
 }
 
-func dispatchToolCall(tc *tools.ToolContext, name, argsJSON string) (string, error) {
+func dispatchToolCall(ctx context.Context, tc *tools.ToolContext, name, argsJSON string) (string, error) {
 	switch name {
 	case "lookup_rules":
 		var params tools.LookupRulesParams
 		if err := json.Unmarshal([]byte(argsJSON), &params); err != nil {
 			return "", fmt.Errorf("parse lookup_rules args: %w", err)
 		}
-		return tc.LookupRules(params)
+		return tc.LookupRules(ctx, &params)
 	case "update_state":
 		var params tools.UpdateStateParams
 		if err := json.Unmarshal([]byte(argsJSON), &params); err != nil {
 			return "", fmt.Errorf("parse update_state args: %w", err)
 		}
-		return tc.UpdateState(params)
+		return tc.UpdateState(ctx, &params)
 	case "roll":
 		var params tools.RollParams
 		if err := json.Unmarshal([]byte(argsJSON), &params); err != nil {
 			return "", fmt.Errorf("parse roll args: %w", err)
 		}
-		return tc.Roll(params)
+		return tc.Roll(ctx, &params)
 	case "get_entity_state":
 		var params tools.GetEntityStateParams
 		if err := json.Unmarshal([]byte(argsJSON), &params); err != nil {
 			return "", fmt.Errorf("parse get_entity_state args: %w", err)
 		}
-		return tc.GetEntityState(params)
+		return tc.GetEntityState(ctx, &params)
 	default:
 		return "", fmt.Errorf("unknown tool %q", name)
 	}

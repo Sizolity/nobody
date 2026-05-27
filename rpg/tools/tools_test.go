@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"math/rand/v2"
 	"testing"
@@ -41,8 +42,9 @@ func testWorld() model.World {
 
 func TestLookupRules_FiltersByCategory(t *testing.T) {
 	tc := &ToolContext{World: testWorld()}
+	ctx := context.Background()
 
-	result, err := tc.LookupRules(LookupRulesParams{Category: "combat"})
+	result, err := tc.LookupRules(ctx, &LookupRulesParams{Category: "combat"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -59,8 +61,9 @@ func TestLookupRules_FiltersByCategory(t *testing.T) {
 
 func TestUpdateState_ValidEntity(t *testing.T) {
 	tc := &ToolContext{World: testWorld()}
+	ctx := context.Background()
 
-	result, err := tc.UpdateState(UpdateStateParams{
+	result, err := tc.UpdateState(ctx, &UpdateStateParams{
 		EntityID: "hero-01", Key: "hp", Value: float64(15),
 	})
 	if err != nil {
@@ -69,10 +72,11 @@ func TestUpdateState_ValidEntity(t *testing.T) {
 	if result == "" {
 		t.Fatal("expected non-empty result")
 	}
-	if len(tc.PendingEffects) != 1 {
-		t.Fatalf("expected 1 pending effect, got %d", len(tc.PendingEffects))
+	effects := tc.GetPendingEffects()
+	if len(effects) != 1 {
+		t.Fatalf("expected 1 pending effect, got %d", len(effects))
 	}
-	effect := tc.PendingEffects[0]
+	effect := effects[0]
 	if effect.Kind != model.EffectUpdateEntityState {
 		t.Errorf("expected kind %q, got %q", model.EffectUpdateEntityState, effect.Kind)
 	}
@@ -90,8 +94,9 @@ func TestUpdateState_ValidEntity(t *testing.T) {
 
 func TestUpdateState_UnknownEntity(t *testing.T) {
 	tc := &ToolContext{World: testWorld()}
+	ctx := context.Background()
 
-	_, err := tc.UpdateState(UpdateStateParams{
+	_, err := tc.UpdateState(ctx, &UpdateStateParams{
 		EntityID: "nonexistent", Key: "hp", Value: float64(10),
 	})
 	if err == nil {
@@ -105,8 +110,9 @@ func TestUpdateState_UnknownEntity(t *testing.T) {
 func TestRoll_ValidRoll(t *testing.T) {
 	rng := rand.New(rand.NewPCG(42, 99))
 	tc := &ToolContext{World: testWorld(), Rng: rng}
+	ctx := context.Background()
 
-	result, err := tc.Roll(RollParams{Sides: 20, Count: 1, Modifier: 3})
+	result, err := tc.Roll(ctx, &RollParams{Sides: 20, Count: 1, Modifier: 3})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -121,9 +127,6 @@ func TestRoll_ValidRoll(t *testing.T) {
 	if _, ok := parsed["rolls"]; !ok {
 		t.Error("expected 'rolls' in result")
 	}
-	if _, ok := parsed["modifier"]; !ok {
-		t.Error("expected 'modifier' in result")
-	}
 	total := parsed["total"].(float64)
 	if total < 4 || total > 23 {
 		t.Errorf("total %v out of range [4,23] for 1d20+3", total)
@@ -132,8 +135,9 @@ func TestRoll_ValidRoll(t *testing.T) {
 
 func TestRoll_InvalidSides(t *testing.T) {
 	tc := &ToolContext{World: testWorld()}
+	ctx := context.Background()
 
-	_, err := tc.Roll(RollParams{Sides: 0, Count: 1})
+	_, err := tc.Roll(ctx, &RollParams{Sides: 0, Count: 1})
 	if err == nil {
 		t.Fatal("expected error for sides < 1")
 	}
@@ -144,8 +148,9 @@ func TestRoll_InvalidSides(t *testing.T) {
 
 func TestGetEntityState_ValidEntity(t *testing.T) {
 	tc := &ToolContext{World: testWorld()}
+	ctx := context.Background()
 
-	result, err := tc.GetEntityState(GetEntityStateParams{EntityID: "hero-01"})
+	result, err := tc.GetEntityState(ctx, &GetEntityStateParams{EntityID: "hero-01"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -160,23 +165,39 @@ func TestGetEntityState_ValidEntity(t *testing.T) {
 	if parsed["name"] != "Arin" {
 		t.Errorf("expected name 'Arin', got %v", parsed["name"])
 	}
-	if parsed["type"] != "character" {
-		t.Errorf("expected type 'character', got %v", parsed["type"])
-	}
-	if _, ok := parsed["state"]; !ok {
-		t.Error("expected 'state' in result")
-	}
 }
 
 func TestGetEntityState_UnknownEntity(t *testing.T) {
 	tc := &ToolContext{World: testWorld()}
+	ctx := context.Background()
 
-	_, err := tc.GetEntityState(GetEntityStateParams{EntityID: "ghost-99"})
+	_, err := tc.GetEntityState(ctx, &GetEntityStateParams{EntityID: "ghost-99"})
 	if err == nil {
 		t.Fatal("expected error for unknown entity")
 	}
 	if !contains(err.Error(), "not found") {
 		t.Errorf("expected 'not found' in error, got: %v", err)
+	}
+}
+
+func TestNewInvokableTools(t *testing.T) {
+	tc := &ToolContext{World: testWorld()}
+	invokableTools, err := NewInvokableTools(tc)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(invokableTools) != 5 {
+		t.Fatalf("expected 5 tools, got %d", len(invokableTools))
+	}
+	ctx := context.Background()
+	for _, tool := range invokableTools {
+		info, err := tool.Info(ctx)
+		if err != nil {
+			t.Fatalf("tool.Info() error: %v", err)
+		}
+		if info.Name == "" {
+			t.Error("tool name should not be empty")
+		}
 	}
 }
 

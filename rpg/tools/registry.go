@@ -2,8 +2,9 @@ package tools
 
 import "github.com/cloudwego/eino/schema"
 
-// Registry returns ToolInfo definitions for all RPG tools so they can be
-// passed to Eino's ToolCallingChatModel.WithTools().
+// Registry returns ToolInfo definitions for all RPG tools.
+// Useful for prompt construction or documentation — the actual executable
+// tools are created via NewInvokableTools.
 func Registry() []*schema.ToolInfo {
 	return []*schema.ToolInfo{
 		{
