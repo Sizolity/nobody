@@ -3627,3 +3627,98 @@ func TestRunPreflightMissingFlags(t *testing.T) {
 		t.Errorf("expected exit 2, got %d", code)
 	}
 }
+
+func TestRunIngestSource(t *testing.T) {
+	t.Parallel()
+	workspace := t.TempDir()
+	ctx := context.Background()
+
+	var stdout, stderr bytes.Buffer
+	code := Run(ctx, []string{
+		"init", "--workspace", workspace, "--world-id", "w1", "--name", "Test",
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("init failed: %s", stderr.String())
+	}
+
+	srcFile := filepath.Join(workspace, "novel.txt")
+	if err := os.WriteFile(srcFile, []byte("Chapter 1\n\nThe hero set out."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	draftFile := filepath.Join(workspace, "draft.json")
+	draftJSON := `{
+		"entities": [
+			{"id": "char_hero", "type": "character", "name": "Hero", "source_refs": ["ch1"]}
+		],
+		"facts": [
+			{"id": "fact_origin", "subject_id": "char_hero", "predicate": "origin", "value": "unknown"}
+		]
+	}`
+	if err := os.WriteFile(draftFile, []byte(draftJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Run(ctx, []string{
+		"ingest-source",
+		"--workspace", workspace,
+		"--world-id", "w1",
+		"--file", srcFile,
+		"--draft-file", draftFile,
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("ingest-source failed (code %d): %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "1 inserted") {
+		t.Errorf("expected '1 inserted' in output, got: %s", stdout.String())
+	}
+
+	st := store.NewFileStore(workspace)
+	world, err := st.LoadSnapshot(ctx, "w1")
+	if err != nil {
+		t.Fatalf("load snapshot: %v", err)
+	}
+	if _, ok := world.Entities["char_hero"]; !ok {
+		t.Error("expected char_hero entity after ingest")
+	}
+	if len(world.Facts) != 1 {
+		t.Errorf("expected 1 fact, got %d", len(world.Facts))
+	}
+}
+
+func TestRunIngestSourceMissingFlags(t *testing.T) {
+	t.Parallel()
+	var stdout, stderr bytes.Buffer
+	code := runIngestSource(context.Background(), nil, &stdout, &stderr)
+	if code != 2 {
+		t.Errorf("expected exit 2, got %d", code)
+	}
+}
+
+func TestRunIngestSourceNoDraftFile(t *testing.T) {
+	t.Parallel()
+	workspace := t.TempDir()
+	ctx := context.Background()
+
+	var stdout, stderr bytes.Buffer
+	Run(ctx, []string{
+		"init", "--workspace", workspace, "--world-id", "w1", "--name", "Test",
+	}, &stdout, &stderr)
+
+	srcFile := filepath.Join(workspace, "story.txt")
+	os.WriteFile(srcFile, []byte("text"), 0o644)
+
+	stdout.Reset()
+	stderr.Reset()
+	code := Run(ctx, []string{
+		"ingest-source",
+		"--workspace", workspace,
+		"--world-id", "w1",
+		"--file", srcFile,
+	}, &stdout, &stderr)
+	if code != 2 {
+		t.Errorf("expected exit 2 without --draft-file, got %d", code)
+	}
+}

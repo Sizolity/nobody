@@ -85,6 +85,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runNarrativeView(ctx, args[1:], stdout, stderr)
 	case "show":
 		return runShow(ctx, args[1:], stdout, stderr)
+	case "ingest-source":
+		return runIngestSource(ctx, args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown command %q\n", args[0])
 		return 2
