@@ -66,9 +66,12 @@ func RunBeat(ctx context.Context, args []string, stdout, stderr io.Writer, chatM
 	if len(output.Choices.Options) > 0 {
 		fmt.Fprintln(stderr, "\nAvailable actions:")
 		for i, opt := range output.Choices.Options {
-			fmt.Fprintf(stderr, "  [%d] %s (%s)\n", i+1, opt.Label, opt.Type)
+			if opt.Type == role.ActionTypeCustom {
+				fmt.Fprintf(stderr, "  [%d]\n", i+1)
+			} else {
+				fmt.Fprintf(stderr, "  [%d] %s (%s)\n", i+1, opt.Label, opt.Type)
+			}
 		}
-		fmt.Fprintln(stderr, "  [*] Custom action (free text)")
 	}
 	fmt.Fprintf(stderr, "beat complete (sequence: %d, effects: %d)\n",
 		output.World.Clock.Sequence, len(output.ToolEffects))

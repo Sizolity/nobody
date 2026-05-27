@@ -9,7 +9,11 @@ require (
 )
 
 require (
+	github.com/cloudwego/eino-ext/components/model/openai v0.1.13 // indirect
+	github.com/cloudwego/eino-ext/libs/acl/openai v0.1.17 // indirect
+	github.com/evanphx/json-patch v0.5.2 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
+	github.com/meguminnnnnnnnn/go-openai v0.1.2 // indirect
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	github.com/smarty/assertions v1.16.0 // indirect
 	golang.org/x/crypto v0.39.0 // indirect

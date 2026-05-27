@@ -22,10 +22,13 @@ type suggestParams struct {
 	Options []role.ActionOption `json:"options" jsonschema:"required,description=2-4 contextual action options for the player"`
 }
 
-const suggestSystemPrompt = `你是 RPG 行动建议器。根据提供的世界规则、场景实体、活跃线索和最新叙事，调用 suggest_actions 工具返回 2-4 个对玩家有意义的行动选项。选项应当：
-- 在类型上有多样性（explore / social / combat / investigate / use_item / rest）
-- 与当前叙事情境紧密相关
-- 不重复彼此
+const suggestSystemPrompt = `你是 RPG 行动建议器。根据提供的世界规则、场景实体、活跃线索和最新叙事，调用 suggest_actions 工具返回行动选项。
+
+规则：
+- 返回 2-4 个具体选项，类型多样（explore / social / combat / investigate / use_item / rest）
+- 与当前叙事情境紧密相关，不重复
+- 绝大多数场景（战斗、探索、社交、调查等）都应该在末尾追加一个 type="custom"、label="" 的空选项，允许玩家自由发挥
+- 仅当场景是「关键剧情节点」时才省略 custom 选项。关键剧情节点的定义：玩家的选择将不可逆地决定整条故事线走向（例如：背叛盟友还是保持忠诚、毁灭圣物还是保留、在两个阵营间做最终抉择）。普通的战斗遭遇、探索发现、NPC 对话都不算关键剧情节点
 不要在工具调用之外输出文本。`
 
 // SuggestActions asks the LLM to propose 2-4 contextual ActionOptions given

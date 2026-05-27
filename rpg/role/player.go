@@ -29,19 +29,37 @@ const (
 	ActionTypeInvestigate ActionType = "investigate"
 	ActionTypeUseItem     ActionType = "use_item"
 	ActionTypeRest        ActionType = "rest"
+	ActionTypeCustom      ActionType = "custom"
 )
 
 // ActionOption is one choice presented to the player after a beat.
 // Label is LLM-generated natural language; Type is a constrained enum.
 type ActionOption struct {
-	Label string     `json:"label" jsonschema:"required,description=Short natural-language description of the action"`
-	Type  ActionType `json:"type" jsonschema:"required,enum=explore,enum=social,enum=combat,enum=investigate,enum=use_item,enum=rest,description=Categorical kind of the action"`
+	Label string     `json:"label" jsonschema:"description=Short natural-language description of the action. Empty when type is custom."`
+	Type  ActionType `json:"type" jsonschema:"required,enum=explore,enum=social,enum=combat,enum=investigate,enum=use_item,enum=rest,enum=custom,description=Categorical kind. Use custom (with empty label) as a trailing open slot unless the scene is a critical plot lock-in."`
 }
 
 // ActionChoices is the set of options after a beat.
-// A free-text custom input is always implicitly available at the UI layer.
 type ActionChoices struct {
 	Options []ActionOption `json:"options"`
+}
+
+// WithCustomSlot returns a copy with a trailing blank custom slot.
+// The slot has an empty Label; if the player selects it without providing
+// input, the consumer should fall back to Options[0].
+func (c ActionChoices) WithCustomSlot() ActionChoices {
+	out := make([]ActionOption, len(c.Options), len(c.Options)+1)
+	copy(out, c.Options)
+	out = append(out, ActionOption{Type: ActionTypeCustom})
+	return ActionChoices{Options: out}
+}
+
+// HasCustomSlot reports whether the last option is a custom slot.
+func (c ActionChoices) HasCustomSlot() bool {
+	if len(c.Options) == 0 {
+		return false
+	}
+	return c.Options[len(c.Options)-1].Type == ActionTypeCustom
 }
 
 // PromptOptions carries pre-rendered world projections into SystemPrompt.
