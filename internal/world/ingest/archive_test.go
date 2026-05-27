@@ -1,6 +1,8 @@
 package ingest
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -57,6 +59,45 @@ func TestArchiveLoadProvenanceNotFound(t *testing.T) {
 	loaded, err := archive.LoadProvenance("nonexistent")
 	require.NoError(t, err)
 	assert.Nil(t, loaded)
+}
+
+func TestArchiveSaveProvenanceAppendsHistory(t *testing.T) {
+	dir := t.TempDir()
+	archive := NewSourceArchive(dir)
+
+	first := []ProvenanceEntry{{WorldID: "char_a", Kind: "entity", SourceRefs: []string{"ch1"}}}
+	second := []ProvenanceEntry{{WorldID: "char_b", Kind: "entity", SourceRefs: []string{"ch2"}}}
+
+	require.NoError(t, archive.SaveProvenance("src_x", first))
+	require.NoError(t, archive.SaveProvenance("src_x", second))
+
+	history, err := archive.LoadProvenanceHistory("src_x")
+	require.NoError(t, err)
+	require.Len(t, history, 2, "second SaveProvenance must append, not overwrite")
+	assert.Equal(t, "char_a", history[0].Entries[0].WorldID)
+	assert.Equal(t, "char_b", history[1].Entries[0].WorldID)
+
+	latest, err := archive.LoadProvenance("src_x")
+	require.NoError(t, err)
+	require.Len(t, latest, 1)
+	assert.Equal(t, "char_b", latest[0].WorldID, "LoadProvenance must return the latest record")
+}
+
+func TestArchiveLoadProvenanceHistoryReadsLegacyFormat(t *testing.T) {
+	dir := t.TempDir()
+	archive := NewSourceArchive(dir)
+
+	// Simulate a legacy file written by the previous overwrite-only version:
+	// a top-level []ProvenanceEntry array.
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "src_legacy"), 0o755))
+	legacy := `[{"world_id":"char_old","kind":"entity","source_refs":["ch1"]}]`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "src_legacy", "provenance.json"), []byte(legacy), 0o644))
+
+	history, err := archive.LoadProvenanceHistory("src_legacy")
+	require.NoError(t, err)
+	require.Len(t, history, 1, "legacy single-array must surface as one record")
+	require.Len(t, history[0].Entries, 1)
+	assert.Equal(t, "char_old", history[0].Entries[0].WorldID)
 }
 
 func TestArchiveListSources(t *testing.T) {

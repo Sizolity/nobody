@@ -7,9 +7,15 @@ type Entity struct {
 	Type        string           `json:"type"`
 	Name        string           `json:"name"`
 	Description string           `json:"description,omitempty"`
-	Components  map[string]any   `json:"components,omitempty"`
-	State       map[string]Value `json:"state,omitempty"`
-	Tags        []string         `json:"tags,omitempty"`
+	// Aliases is the set of additional human-readable names this entity
+	// is known by (nicknames, epithets, translations, code-names).
+	// Distinct from Name (the canonical display name) and Tags (taxonomy).
+	// The ingest pipeline populates this from extracted drafts; alias
+	// resolvers may also push their findings here.
+	Aliases    []string         `json:"aliases,omitempty"`
+	Components map[string]any   `json:"components,omitempty"`
+	State      map[string]Value `json:"state,omitempty"`
+	Tags       []string         `json:"tags,omitempty"`
 }
 
 const (
@@ -51,6 +57,11 @@ func (e Entity) Validate() error {
 	}
 	if e.Name == "" {
 		return fmt.Errorf("entity.name is required")
+	}
+	for i, alias := range e.Aliases {
+		if alias == "" {
+			return fmt.Errorf("entity.aliases[%d] must not be empty", i)
+		}
 	}
 	for key, component := range e.Components {
 		if err := validateComponent(key, component); err != nil {

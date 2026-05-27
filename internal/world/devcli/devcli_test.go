@@ -3671,8 +3671,8 @@ func TestRunIngestSource(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("ingest-source failed (code %d): %s", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "1 inserted") {
-		t.Errorf("expected '1 inserted' in output, got: %s", stdout.String())
+	if !strings.Contains(stdout.String(), "2 inserted") {
+		t.Errorf("expected '2 inserted' (1 entity + 1 fact), got: %s", stdout.String())
 	}
 
 	st := store.NewFileStore(workspace)
@@ -3694,6 +3694,183 @@ func TestRunIngestSourceMissingFlags(t *testing.T) {
 	code := runIngestSource(context.Background(), nil, &stdout, &stderr)
 	if code != 2 {
 		t.Errorf("expected exit 2, got %d", code)
+	}
+}
+
+func TestRunIngestSourceMinConfidence(t *testing.T) {
+	t.Parallel()
+	workspace := t.TempDir()
+	ctx := context.Background()
+
+	var stdout, stderr bytes.Buffer
+	code := Run(ctx, []string{
+		"init", "--workspace", workspace, "--world-id", "w1", "--name", "Test",
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("init failed: %s", stderr.String())
+	}
+
+	srcFile := filepath.Join(workspace, "novel.txt")
+	if err := os.WriteFile(srcFile, []byte("Chapter 1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	draftFile := filepath.Join(workspace, "draft.json")
+	draftJSON := `{
+		"entities": [
+			{"id": "char_high", "type": "character", "name": "High", "confidence": 0.9},
+			{"id": "char_low", "type": "character", "name": "Low", "confidence": 0.2}
+		]
+	}`
+	if err := os.WriteFile(draftFile, []byte(draftJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Run(ctx, []string{
+		"ingest-source",
+		"--workspace", workspace,
+		"--world-id", "w1",
+		"--file", srcFile,
+		"--draft-file", draftFile,
+		"--min-confidence", "0.5",
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("ingest-source failed (code %d): %s", code, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "1 inserted") {
+		t.Errorf("expected '1 inserted', got: %s", out)
+	}
+	if !strings.Contains(out, "1 filtered") {
+		t.Errorf("expected '1 filtered', got: %s", out)
+	}
+
+	st := store.NewFileStore(workspace)
+	world, err := st.LoadSnapshot(ctx, "w1")
+	if err != nil {
+		t.Fatalf("load snapshot: %v", err)
+	}
+	if _, ok := world.Entities["char_high"]; !ok {
+		t.Error("expected char_high entity")
+	}
+	if _, ok := world.Entities["char_low"]; ok {
+		t.Error("char_low should have been filtered out")
+	}
+}
+
+func TestRunIngestSourceKindAndStrict(t *testing.T) {
+	t.Parallel()
+	workspace := t.TempDir()
+	ctx := context.Background()
+
+	var stdout, stderr bytes.Buffer
+	code := Run(ctx, []string{
+		"init", "--workspace", workspace, "--world-id", "w1", "--name", "Test",
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("init failed: %s", stderr.String())
+	}
+
+	srcFile := filepath.Join(workspace, "novel.txt")
+	if err := os.WriteFile(srcFile, []byte("text"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// draft with a dangling fact subject -> warning
+	draftFile := filepath.Join(workspace, "draft.json")
+	draftJSON := `{
+		"entities": [{"id": "char_hero", "type": "character", "name": "Hero"}],
+		"facts": [{"id": "fact_ghost", "subject_id": "phantom", "predicate": "is", "value": "void"}]
+	}`
+	if err := os.WriteFile(draftFile, []byte(draftJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Run(ctx, []string{
+		"ingest-source",
+		"--workspace", workspace,
+		"--world-id", "w1",
+		"--file", srcFile,
+		"--kind", "novel",
+		"--draft-file", draftFile,
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("non-strict ingest should succeed despite warning: %s", stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `kind="novel"`) {
+		t.Errorf("expected kind in output, got: %s", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "warning:") {
+		t.Errorf("expected warning in stderr, got: %s", stderr.String())
+	}
+
+	// Same draft under --strict should fail
+	stdout.Reset()
+	stderr.Reset()
+	code = Run(ctx, []string{
+		"ingest-source",
+		"--workspace", workspace,
+		"--world-id", "w1",
+		"--file", srcFile,
+		"--kind", "novel",
+		"--draft-file", draftFile,
+		"--strict",
+	}, &stdout, &stderr)
+	if code == 0 {
+		t.Errorf("strict mode should reject draft with warnings; stdout: %s", stdout.String())
+	}
+}
+
+func TestRunIngestSourceRejectsInvalidThreadKind(t *testing.T) {
+	t.Parallel()
+	workspace := t.TempDir()
+	ctx := context.Background()
+
+	var stdout, stderr bytes.Buffer
+	code := Run(ctx, []string{
+		"init", "--workspace", workspace, "--world-id", "w1", "--name", "Test",
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("init failed: %s", stderr.String())
+	}
+
+	srcFile := filepath.Join(workspace, "src.txt")
+	if err := os.WriteFile(srcFile, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	draftFile := filepath.Join(workspace, "draft.json")
+	draftJSON := `{
+		"threads": [
+			{"id": "t_bad", "kind": "subplot", "title": "Bad", "status": "open"},
+			{"id": "t_ok",  "kind": "quest",   "title": "Ok",  "status": "open"}
+		]
+	}`
+	if err := os.WriteFile(draftFile, []byte(draftJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	code = Run(ctx, []string{
+		"ingest-source",
+		"--workspace", workspace,
+		"--world-id", "w1",
+		"--file", srcFile,
+		"--draft-file", draftFile,
+	}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("ingest failed: %s", stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "1 rejected") {
+		t.Errorf("expected '1 rejected', got: %s", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "thread \"t_bad\" rejected") {
+		t.Errorf("expected rejection note for t_bad, stderr: %s", stderr.String())
 	}
 }
 

@@ -9,7 +9,7 @@ require (
 )
 
 require (
-	github.com/cloudwego/eino-ext/components/model/openai v0.1.13 // indirect
+	github.com/cloudwego/eino-ext/components/model/openai v0.1.13
 	github.com/cloudwego/eino-ext/libs/acl/openai v0.1.17 // indirect
 	github.com/evanphx/json-patch v0.5.2 // indirect
 	github.com/kr/pretty v0.3.1 // indirect

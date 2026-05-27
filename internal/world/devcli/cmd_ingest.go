@@ -17,9 +17,12 @@ func runIngestSource(ctx context.Context, args []string, stdout, stderr io.Write
 	workspace := fs.String("workspace", "", "workspace directory")
 	worldID := fs.String("world-id", "", "world id")
 	file := fs.String("file", "", "source file path (txt or md)")
+	kind := fs.String("kind", "", "open-ended source kind hint (e.g. novel, script, wiki); framework does not enumerate")
 	draftFile := fs.String("draft-file", "", "pre-computed draft JSON file (skips parsing)")
 	conflict := fs.String("conflict", "skip", "conflict policy: skip or replace")
 	allowDangling := fs.Bool("allow-dangling", false, "allow dangling entity references")
+	minConf := fs.Float64("min-confidence", 0, "filter draft items below this confidence (0 = no filter)")
+	strict := fs.Bool("strict", false, "treat validation warnings as errors")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -40,6 +43,7 @@ func runIngestSource(ctx context.Context, args []string, stdout, stderr io.Write
 		fmt.Fprintf(stderr, "load source: %v\n", err)
 		return 1
 	}
+	doc.Kind = *kind
 
 	var draft ingest.Draft
 	if *draftFile != "" {
@@ -68,8 +72,15 @@ func runIngestSource(ctx context.Context, args []string, stdout, stderr io.Write
 	for _, w := range vr.Warnings {
 		fmt.Fprintf(stderr, "warning: %s\n", w)
 	}
+	if *strict && len(vr.Warnings) > 0 {
+		fmt.Fprintln(stderr, "strict mode: warnings treated as errors")
+		return 1
+	}
 
-	opts := ingest.CompileOptions{AllowDanglingRefs: *allowDangling}
+	opts := ingest.CompileOptions{
+		AllowDanglingRefs: *allowDangling,
+		MinConfidence:     *minConf,
+	}
 	if *conflict == "replace" {
 		opts.ConflictPolicy = ingest.ConflictPolicyReplace
 	}
@@ -77,6 +88,14 @@ func runIngestSource(ctx context.Context, args []string, stdout, stderr io.Write
 	compiled, report, err := ingest.CompileDraft(world, draft, opts)
 	if err != nil {
 		fmt.Fprintf(stderr, "compile draft: %v\n", err)
+		return 1
+	}
+
+	for _, note := range report.Notes {
+		fmt.Fprintf(stderr, "note: %s\n", note)
+	}
+	if *strict && report.Rejected > 0 {
+		fmt.Fprintln(stderr, "strict mode: rejected items treated as failure")
 		return 1
 	}
 
@@ -96,7 +115,7 @@ func runIngestSource(ctx context.Context, args []string, stdout, stderr io.Write
 		}
 	}
 
-	fmt.Fprintf(stdout, "ingested %s: %d inserted, %d skipped, %d provenance entries\n",
-		doc.Filename, report.Inserted, report.Skipped, len(report.Provenance))
+	fmt.Fprintf(stdout, "ingested %s (kind=%q): %d inserted, %d skipped, %d filtered, %d rejected, %d provenance entries\n",
+		doc.Filename, doc.Kind, report.Inserted, report.Skipped, report.Filtered, report.Rejected, len(report.Provenance))
 	return 0
 }

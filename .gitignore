@@ -42,3 +42,4 @@ workspace/go-sorting/
 *.pem
 *.key
 
+nobody-world

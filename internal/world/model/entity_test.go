@@ -21,6 +21,34 @@ func TestEntityValidateRequiresCoreFields(t *testing.T) {
 	}
 }
 
+func TestEntityValidateAcceptsAliases(t *testing.T) {
+	t.Parallel()
+
+	entity := Entity{
+		ID:      "char_kael",
+		Type:    "character",
+		Name:    "Kael",
+		Aliases: []string{"Kael the Brave", "凯尔", "K"},
+	}
+	if err := entity.Validate(); err != nil {
+		t.Fatalf("Validate rejected valid aliases: %v", err)
+	}
+}
+
+func TestEntityValidateRejectsEmptyAlias(t *testing.T) {
+	t.Parallel()
+
+	entity := Entity{
+		ID:      "char_kael",
+		Type:    "character",
+		Name:    "Kael",
+		Aliases: []string{"Kael the Brave", ""},
+	}
+	if err := entity.Validate(); err == nil {
+		t.Fatal("Validate accepted empty alias")
+	}
+}
+
 func TestEntityValidateAcceptsKnownComponents(t *testing.T) {
 	t.Parallel()
 
