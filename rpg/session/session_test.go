@@ -16,6 +16,7 @@ import (
 	"github.com/sizolity/nobody/rpg/fog"
 	"github.com/sizolity/nobody/rpg/role"
 	"github.com/sizolity/nobody/rpg/rule"
+	"github.com/sizolity/nobody/rpg/story"
 	"github.com/sizolity/nobody/rpg/tools"
 )
 
@@ -364,5 +365,159 @@ func TestRunBeat_WithFog(t *testing.T) {
 	level := updated.GetEntityLevel("loc-cavern")
 	if level != fog.Explored {
 		t.Errorf("expected loc-cavern to be explored, got %s", level)
+	}
+}
+
+// === WorldLine integration ===
+
+// setupTestWorldWithSceneClock saves a world whose clock kind is scene so the
+// scheduler's TimeScale lookup picks Drift.Scene.
+func setupTestWorldWithSceneClock(t *testing.T) string {
+	t.Helper()
+	dir, world := setupTestWorld(t)
+	world.Clock.Current = worldmodel.WorldTime{Kind: worldmodel.WorldTimeScene, Tick: world.Clock.Sequence}
+	if err := store.NewFileStore(dir).SaveSnapshot(context.Background(), world); err != nil {
+		t.Fatalf("re-save world with scene clock: %v", err)
+	}
+	return dir
+}
+
+func TestRunBeat_WorldLine_DriftAndMilestone(t *testing.T) {
+	dir := setupTestWorldWithSceneClock(t)
+
+	// Seed a WorldLine that drifts +0.25/scene and fires a milestone at
+	// tension >= 0.7. Thread "thread-explore" starts at default tension 0.
+	// We bump its tension via SaveSnapshot to 0.5 so one drift step crosses
+	// the milestone threshold.
+	worldsDir := filepath.Join(dir, "worlds")
+	fs := store.NewFileStore(dir)
+	world, _ := fs.LoadSnapshot(context.Background(), "world-test-01")
+	world.Threads[0].Tension = 0.5
+	if err := fs.SaveSnapshot(context.Background(), world); err != nil {
+		t.Fatalf("seed thread tension: %v", err)
+	}
+
+	storyStore := story.NewStore(worldsDir)
+	lines := []story.WorldLine{{
+		ID:         "wl_explore",
+		ThreadID:   worldmodel.ThreadID("thread-explore"),
+		Visibility: story.VisibilityHinted,
+		Drift:      story.Drift{Scene: 0.25},
+		Milestones: []story.Milestone{{
+			ID: "m_crisis",
+			Condition: story.MilestoneCondition{
+				Kind: story.CondThreadTensionGTE,
+				Args: map[string]any{"thread_id": "thread-explore", "threshold": 0.70},
+			},
+			Effects: []worldmodel.Effect{{
+				Kind:     worldmodel.EffectUpdateThread,
+				TargetID: "thread-explore",
+				Payload: map[string]worldmodel.Value{
+					"status": {Kind: worldmodel.ValueKindString, Raw: worldmodel.ThreadStatusActive},
+				},
+			}},
+		}},
+	}}
+	if err := storyStore.Save("world-test-01", lines); err != nil {
+		t.Fatalf("seed worldlines: %v", err)
+	}
+
+	sess, err := New(Config{
+		GM:            &mockGM{},
+		Players:       testPlayers(),
+		WorkspacePath: dir,
+		ChatModel:     &mockChatModel{},
+		MaxStep:       5,
+		StoryEnabled:  true,
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	output, err := sess.RunBeat(context.Background(), BeatInput{
+		WorldID: "world-test-01",
+		Action: role.PlayerAction{
+			PlayerID: "p1",
+			Content:  "I peer deeper into the cavern.",
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunBeat: %v", err)
+	}
+
+	// Thread tension should have drifted from 0.5 → 0.75 (clamped).
+	var th worldmodel.WorldThread
+	for _, x := range output.World.Threads {
+		if x.ID == "thread-explore" {
+			th = x
+		}
+	}
+	if th.Tension <= 0.5 {
+		t.Errorf("expected drifted tension > 0.5, got %v", th.Tension)
+	}
+
+	// Milestone should have been triggered exactly once and persisted.
+	updatedLines, err := storyStore.Load("world-test-01")
+	if err != nil {
+		t.Fatalf("load worldlines: %v", err)
+	}
+	if len(updatedLines) != 1 {
+		t.Fatalf("expected 1 line, got %d", len(updatedLines))
+	}
+	if !updatedLines[0].Milestones[0].Triggered {
+		t.Errorf("expected milestone Triggered=true after crossing threshold")
+	}
+
+	// Second beat: tension already at 0.75; further drift to 1.0; milestone
+	// already triggered → no second milestone event but tension still ticks.
+	output2, err := sess.RunBeat(context.Background(), BeatInput{
+		WorldID: "world-test-01",
+		Action: role.PlayerAction{
+			PlayerID: "p1",
+			Content:  "I press on.",
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunBeat #2: %v", err)
+	}
+	for _, x := range output2.World.Threads {
+		if x.ID == "thread-explore" {
+			if x.Tension < 0.99 {
+				t.Errorf("expected tension near 1.0 after second drift, got %v", x.Tension)
+			}
+		}
+	}
+	finalLines, _ := storyStore.Load("world-test-01")
+	if !finalLines[0].Milestones[0].Triggered {
+		t.Errorf("milestone Triggered should persist as true across beats")
+	}
+}
+
+func TestRunBeat_WorldLineDisabled_NoFile(t *testing.T) {
+	// Sanity: default session (StoryEnabled=false) should not create or
+	// touch worldlines.json even if scheduler would otherwise misbehave.
+	dir, _ := setupTestWorld(t)
+
+	sess, err := New(Config{
+		GM:            &mockGM{},
+		Players:       testPlayers(),
+		WorkspacePath: dir,
+		ChatModel:     &mockChatModel{},
+		MaxStep:       5,
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	if _, err := sess.RunBeat(context.Background(), BeatInput{
+		WorldID: "world-test-01",
+		Action:  role.PlayerAction{PlayerID: "p1", Content: "x"},
+	}); err != nil {
+		t.Fatalf("RunBeat: %v", err)
+	}
+
+	path := filepath.Join(dir, "worlds", "world-test-01", "worldlines.json")
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("expected no worldlines.json when StoryEnabled=false, stat=%v", err)
 	}
 }

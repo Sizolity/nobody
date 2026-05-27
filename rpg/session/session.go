@@ -31,6 +31,7 @@ import (
 	"github.com/sizolity/nobody/internal/world/view"
 	"github.com/sizolity/nobody/rpg/fog"
 	"github.com/sizolity/nobody/rpg/role"
+	"github.com/sizolity/nobody/rpg/story"
 	"github.com/sizolity/nobody/rpg/tools"
 )
 
@@ -40,6 +41,7 @@ type Session struct {
 	players    []role.Player
 	store      *store.FileStore
 	fogStore   *fog.Store
+	storyStore *story.Store
 	runtime    worldruntime.Runtime
 	chatModel  model.ToolCallingChatModel
 	rng        *rand.Rand
@@ -51,11 +53,16 @@ type Session struct {
 type Config struct {
 	GM            role.GM
 	Players       []role.Player
-	WorkspacePath string // root for all data; worlds and fog data colocated under {WorkspacePath}/worlds/{worldID}/
+	WorkspacePath string // root for all data; worlds, fog, and worldlines colocated under {WorkspacePath}/worlds/{worldID}/
 	ChatModel     model.ToolCallingChatModel
 	Rng           *rand.Rand
 	MaxStep       int  // max tool-calling iterations per beat (default 10)
 	FogEnabled    bool // enable progressive world disclosure (fog of war)
+	// StoryEnabled toggles the WorldLine scheduler. When true, the session
+	// loads worldlines.json at beat start, ticks them after player effects
+	// apply, applies emitted events, and persists updated lines. Default off
+	// keeps existing sessions unchanged.
+	StoryEnabled bool
 }
 
 func New(cfg Config) (*Session, error) {
@@ -77,7 +84,7 @@ func New(cfg Config) (*Session, error) {
 		maxStep = 10
 	}
 	worldsDir := filepath.Join(cfg.WorkspacePath, "worlds")
-	return &Session{
+	sess := &Session{
 		gm:         cfg.GM,
 		players:    cfg.Players,
 		store:      store.NewFileStore(cfg.WorkspacePath),
@@ -87,7 +94,11 @@ func New(cfg Config) (*Session, error) {
 		rng:        rng,
 		maxStep:    maxStep,
 		fogEnabled: cfg.FogEnabled,
-	}, nil
+	}
+	if cfg.StoryEnabled {
+		sess.storyStore = story.NewStore(worldsDir)
+	}
+	return sess, nil
 }
 
 // BeatInput is the user-facing input for running a beat.
@@ -208,6 +219,36 @@ func (s *Session) RunBeat(ctx context.Context, input BeatInput) (BeatOutput, err
 	// Sequence increments once per beat regardless of effects, mirroring the
 	// pre-refactor behavior (one tick == one PL action).
 	world.Clock.Sequence++
+
+	// === WorldLine scheduler ===
+	// Runs after player tool-effects are applied and clock advances, so it
+	// sees the post-action world. Emitted events flow through the same
+	// runtime as player effects and persist with the same SaveSnapshot below.
+	if s.storyStore != nil {
+		lines, err := s.storyStore.Load(input.WorldID)
+		if err != nil {
+			return BeatOutput{}, fmt.Errorf("load worldlines: %w", err)
+		}
+		if len(lines) > 0 {
+			tickOut, err := story.Tick(story.TickInput{
+				World:     world,
+				Lines:     lines,
+				TimeScale: world.Clock.Current.Kind,
+			}, s.rng)
+			if err != nil {
+				return BeatOutput{}, fmt.Errorf("worldline tick: %w", err)
+			}
+			for _, ev := range tickOut.Events {
+				world, err = s.runtime.ApplyEvent(world, ev)
+				if err != nil {
+					return BeatOutput{}, fmt.Errorf("apply worldline event: %w", err)
+				}
+			}
+			if err := s.storyStore.Save(input.WorldID, tickOut.UpdatedLines); err != nil {
+				return BeatOutput{}, fmt.Errorf("save worldlines: %w", err)
+			}
+		}
+	}
 
 	if err := s.store.SaveSnapshot(ctx, world); err != nil {
 		return BeatOutput{}, fmt.Errorf("save world: %w", err)
