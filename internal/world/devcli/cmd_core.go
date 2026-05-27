@@ -294,7 +294,7 @@ func runValidate(ctx context.Context, args []string, stdout, stderr io.Writer) i
 	return 0
 }
 
-func runExport(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+func runExport(ctx context.Context, args []string, _, stderr io.Writer) int {
 	fs := newFlagSet("export", stderr)
 	workspace := fs.String("workspace", "", "workspace directory")
 	worldID := fs.String("world-id", "", "world id")

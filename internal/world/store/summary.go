@@ -5,6 +5,9 @@ import (
 	"sort"
 	"strings"
 
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
+
 	"github.com/sizolity/nobody/internal/world/model"
 )
 
@@ -79,7 +82,7 @@ func formatEntities(b *strings.Builder, entities map[model.EntityID]model.Entity
 	for _, t := range types {
 		ents := byType[t]
 		sort.Slice(ents, func(i, j int) bool { return ents[i].ID < ents[j].ID })
-		fmt.Fprintf(b, "\n### %s (%d)\n\n", strings.Title(t), len(ents))
+		fmt.Fprintf(b, "\n### %s (%d)\n\n", cases.Title(language.Und).String(t), len(ents))
 		for _, e := range ents {
 			fmt.Fprintf(b, "- **%s** (%s)", e.Name, e.ID)
 			if e.Description != "" {

@@ -349,29 +349,6 @@ func diffThreadFields(a, b model.WorldThread) []FieldDelta {
 	return deltas
 }
 
-func factIDs(facts []model.Fact) map[string]bool {
-	m := make(map[string]bool, len(facts))
-	for _, f := range facts {
-		m[string(f.ID)] = true
-	}
-	return m
-}
-
-func relationIDs(rels []model.Relation) map[string]bool {
-	m := make(map[string]bool, len(rels))
-	for _, r := range rels {
-		m[string(r.ID)] = true
-	}
-	return m
-}
-
-func memoryIDs(mems []model.MemoryRecord) map[string]bool {
-	m := make(map[string]bool, len(mems))
-	for _, mem := range mems {
-		m[string(mem.ID)] = true
-	}
-	return m
-}
 
 func eventIDs(events []model.WorldEvent) map[string]bool {
 	m := make(map[string]bool, len(events))

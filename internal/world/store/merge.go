@@ -189,12 +189,6 @@ func mergeThreads(out *model.World, base, source model.World, baseSrc, baseTgt W
 	}
 }
 
-type idGetter[T any] interface {
-	~struct {
-		ID string
-	}
-}
-
 func mergeSlice[T any](target *[]T, source []T, diff SliceDiff, added *[]string, _ string) {
 	if len(diff.Added) == 0 {
 		return

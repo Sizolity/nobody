@@ -77,7 +77,7 @@ func runClockShow(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	return 0
 }
 
-func runClockAdvance(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+func runClockAdvance(ctx context.Context, args []string, _, stderr io.Writer) int {
 	fs := newFlagSet("clock advance", stderr)
 	workspace := fs.String("workspace", "", "workspace directory")
 	worldID := fs.String("world-id", "", "world id")
@@ -401,7 +401,7 @@ func runManageQueueEnqueue(ctx context.Context, args []string, stdout, stderr io
 	return writeJSON(stdout, stderr, "encode queue item", item)
 }
 
-func runManageQueueRemove(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+func runManageQueueRemove(ctx context.Context, args []string, _ io.Writer, stderr io.Writer) int {
 	fs := newFlagSet("manage-queue remove", stderr)
 	workspace := fs.String("workspace", "", "workspace directory")
 	worldID := fs.String("world-id", "", "world id")
@@ -664,7 +664,7 @@ func splitTags(s string) []string {
 	return tags
 }
 
-func runManageEntitySetTag(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+func runManageEntitySetTag(ctx context.Context, args []string, _ io.Writer, stderr io.Writer) int {
 	fs := newFlagSet("manage-entity set-tag", stderr)
 	workspace := fs.String("workspace", "", "workspace directory")
 	worldID := fs.String("world-id", "", "world id")
@@ -733,7 +733,7 @@ func runManageEntitySetTag(ctx context.Context, args []string, stdout, stderr io
 	return 0
 }
 
-func runManageEntityRemove(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+func runManageEntityRemove(ctx context.Context, args []string, _ io.Writer, stderr io.Writer) int {
 	fs := newFlagSet("manage-entity remove", stderr)
 	workspace := fs.String("workspace", "", "workspace directory")
 	worldID := fs.String("world-id", "", "world id")
@@ -913,7 +913,7 @@ func runManageRelationAdd(ctx context.Context, args []string, stdout, stderr io.
 	return writeJSON(stdout, stderr, "encode relation", rel)
 }
 
-func runManageRelationRemove(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+func runManageRelationRemove(ctx context.Context, args []string, _ io.Writer, stderr io.Writer) int {
 	fs := newFlagSet("manage-relation remove", stderr)
 	workspace := fs.String("workspace", "", "workspace directory")
 	worldID := fs.String("world-id", "", "world id")
@@ -1099,7 +1099,7 @@ func runManageFactAdd(ctx context.Context, args []string, stdout, stderr io.Writ
 	return writeJSON(stdout, stderr, "encode fact", fact)
 }
 
-func runManageFactRemove(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+func runManageFactRemove(ctx context.Context, args []string, _ io.Writer, stderr io.Writer) int {
 	fs := newFlagSet("manage-fact remove", stderr)
 	workspace := fs.String("workspace", "", "workspace directory")
 	worldID := fs.String("world-id", "", "world id")
@@ -1520,7 +1520,7 @@ func runManageThreadAdd(ctx context.Context, args []string, stdout, stderr io.Wr
 	return writeJSON(stdout, stderr, "encode thread", thread)
 }
 
-func runManageThreadSetStatus(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+func runManageThreadSetStatus(ctx context.Context, args []string, _ io.Writer, stderr io.Writer) int {
 	fs := newFlagSet("manage-thread set-status", stderr)
 	workspace := fs.String("workspace", "", "workspace directory")
 	worldID := fs.String("world-id", "", "world id")

@@ -1801,7 +1801,7 @@ func TestRunBeatMultiStepAccumulatesResults(t *testing.T) {
 	_ = genFactory
 
 	var stdout, stderr bytes.Buffer
-	bundle := rpgbridge.AdaptWorld(world, rpgbridge.Options{RecentEvents: 10})
+	_ = rpgbridge.AdaptWorld(world, rpgbridge.Options{RecentEvents: 10})
 
 	results := make([]beatOutput, 0, 3)
 	for step := 0; step < 3; step++ {
@@ -1809,7 +1809,7 @@ func TestRunBeatMultiStepAccumulatesResults(t *testing.T) {
 		if err != nil {
 			t.Fatalf("LoadSnapshot step %d: %v", step, err)
 		}
-		bundle = rpgbridge.AdaptWorld(w, rpgbridge.Options{RecentEvents: 10})
+		bundle := rpgbridge.AdaptWorld(w, rpgbridge.Options{RecentEvents: 10})
 		result, pErr := executeBeatPipeline(ctx, gen, w, bundle, st, 0, &stderr)
 		if pErr != nil {
 			t.Fatalf("step %d: %v", step, pErr)

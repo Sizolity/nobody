@@ -162,7 +162,7 @@ func runManageRuleAdd(ctx context.Context, args []string, stdout, stderr io.Writ
 	return writeJSON(stdout, stderr, "encode rule", r)
 }
 
-func runManageRuleRemove(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+func runManageRuleRemove(ctx context.Context, args []string, _, stderr io.Writer) int {
 	fs := newFlagSet("manage-rule remove", stderr)
 	workspace := fs.String("workspace", "", "workspace directory")
 	worldID := fs.String("world-id", "", "world id")
@@ -205,7 +205,7 @@ func runManageRuleRemove(ctx context.Context, args []string, stdout, stderr io.W
 	return 0
 }
 
-func runManageRuleSetEnabled(ctx context.Context, args []string, stdout, stderr io.Writer, enabled bool) int {
+func runManageRuleSetEnabled(ctx context.Context, args []string, _, stderr io.Writer, enabled bool) int {
 	verb := "enable"
 	if !enabled {
 		verb = "disable"
