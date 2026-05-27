@@ -15,6 +15,16 @@ import (
 	"github.com/sizolity/nobody/rpg/rule"
 )
 
+// Tool descriptions are shared between NewInvokableTools (full set) and
+// NewDisclosedTools (progressive disclosure) so the two factories cannot drift.
+const (
+	descLookupRules      = "Retrieve detailed rules for a specific category. Use when you need mechanics before making decisions."
+	descUpdateState      = "Apply a validated state change to an entity. Use for precise numeric changes or status transitions."
+	descRoll             = "Roll dice for randomized outcomes. Returns the numeric result."
+	descGetEntityState   = "Read-only inspection of an entity's current state."
+	descExploreKnowledge = "Reveal a hidden entity or fact to make it available in future beats. Call when the player discovers something new through exploration, interaction, or study."
+)
+
 type LookupRulesParams struct {
 	Category string   `json:"category" jsonschema:"description=Rule category to look up"`
 	Tags     []string `json:"tags,omitempty" jsonschema:"description=Optional tag filter"`
@@ -132,47 +142,27 @@ func (tc *ToolContext) GetEntityState(_ context.Context, params *GetEntityStateP
 // NewInvokableTools creates Eino InvokableTool instances bound to a ToolContext.
 // These can be passed directly to react.AgentConfig.ToolsConfig.
 func NewInvokableTools(tc *ToolContext) ([]tool.InvokableTool, error) {
-	lookupRules, err := utils.InferTool(
-		"lookup_rules",
-		"Retrieve detailed rules for a specific category. Use when you need mechanics before making decisions.",
-		tc.LookupRules,
-	)
+	lookupRules, err := utils.InferTool("lookup_rules", descLookupRules, tc.LookupRules)
 	if err != nil {
 		return nil, fmt.Errorf("infer lookup_rules: %w", err)
 	}
 
-	updateState, err := utils.InferTool(
-		"update_state",
-		"Apply a validated state change to an entity. Use for precise numeric changes or status transitions.",
-		tc.UpdateState,
-	)
+	updateState, err := utils.InferTool("update_state", descUpdateState, tc.UpdateState)
 	if err != nil {
 		return nil, fmt.Errorf("infer update_state: %w", err)
 	}
 
-	roll, err := utils.InferTool(
-		"roll",
-		"Roll dice for randomized outcomes. Returns the numeric result.",
-		tc.Roll,
-	)
+	roll, err := utils.InferTool("roll", descRoll, tc.Roll)
 	if err != nil {
 		return nil, fmt.Errorf("infer roll: %w", err)
 	}
 
-	getEntityState, err := utils.InferTool(
-		"get_entity_state",
-		"Read-only inspection of an entity's current state.",
-		tc.GetEntityState,
-	)
+	getEntityState, err := utils.InferTool("get_entity_state", descGetEntityState, tc.GetEntityState)
 	if err != nil {
 		return nil, fmt.Errorf("infer get_entity_state: %w", err)
 	}
 
-	exploreKnowledge, err := utils.InferTool(
-		"explore_knowledge",
-		"Reveal a hidden entity or fact to make it available in future beats. Call when the player discovers something new through exploration, interaction, or study.",
-		tc.ExploreKnowledge,
-	)
+	exploreKnowledge, err := utils.InferTool("explore_knowledge", descExploreKnowledge, tc.ExploreKnowledge)
 	if err != nil {
 		return nil, fmt.Errorf("infer explore_knowledge: %w", err)
 	}
@@ -230,4 +220,72 @@ func inferValueKind(v any) string {
 	default:
 		return model.ValueKindString
 	}
+}
+
+// NewDisclosedTools returns the subset of tools appropriate for the current
+// beat, given the world state and disclosure context. Progressive disclosure:
+// the LLM never sees tools that have no useful effect right now.
+//
+// Always available: get_entity_state, roll.
+// When tc.World.Rules is non-empty: + lookup_rules.
+// When any entity has mutable state (State map non-empty OR StatsComponent present): + update_state.
+// When tc.Disclosure != nil (fog enabled): + explore_knowledge.
+//
+// Tool descriptions are shared with NewInvokableTools via package-level
+// const declarations to prevent drift.
+func NewDisclosedTools(tc *ToolContext) ([]tool.InvokableTool, error) {
+	out := make([]tool.InvokableTool, 0, 5)
+
+	getState, err := utils.InferTool("get_entity_state", descGetEntityState, tc.GetEntityState)
+	if err != nil {
+		return nil, fmt.Errorf("infer get_entity_state: %w", err)
+	}
+	out = append(out, getState)
+
+	rollTool, err := utils.InferTool("roll", descRoll, tc.Roll)
+	if err != nil {
+		return nil, fmt.Errorf("infer roll: %w", err)
+	}
+	out = append(out, rollTool)
+
+	if len(tc.World.Rules) > 0 {
+		lookupRules, err := utils.InferTool("lookup_rules", descLookupRules, tc.LookupRules)
+		if err != nil {
+			return nil, fmt.Errorf("infer lookup_rules: %w", err)
+		}
+		out = append(out, lookupRules)
+	}
+
+	if hasMutableEntities(tc.World) {
+		updateState, err := utils.InferTool("update_state", descUpdateState, tc.UpdateState)
+		if err != nil {
+			return nil, fmt.Errorf("infer update_state: %w", err)
+		}
+		out = append(out, updateState)
+	}
+
+	if tc.Disclosure != nil {
+		explore, err := utils.InferTool("explore_knowledge", descExploreKnowledge, tc.ExploreKnowledge)
+		if err != nil {
+			return nil, fmt.Errorf("infer explore_knowledge: %w", err)
+		}
+		out = append(out, explore)
+	}
+
+	return out, nil
+}
+
+// hasMutableEntities reports whether any entity carries mutable state
+// (ad-hoc State map non-empty OR a Stats component present) that an
+// update_state tool could affect.
+func hasMutableEntities(w model.World) bool {
+	for _, e := range w.Entities {
+		if len(e.State) > 0 {
+			return true
+		}
+		if _, ok := e.StatsComponent(); ok {
+			return true
+		}
+	}
+	return false
 }

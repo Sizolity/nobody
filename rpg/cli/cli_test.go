@@ -14,9 +14,33 @@ import (
 	"github.com/sizolity/nobody/rpg/rule"
 )
 
-type mockChatModel struct{}
+// mockChatModel handles both invocations the CLI now performs:
+//
+//  1. ReAct agent — bound to RPG tools; we return plain narrative text so the
+//     agent finishes after one model call.
+//  2. Narrator.SuggestActions — bound to a single suggest_actions tool; we
+//     return a synthetic tool call carrying 2 canned ActionOptions.
+//
+// The variant is selected via WithTools: any binding whose tool list contains
+// "suggest_actions" produces the structured tool-call response.
+type mockChatModel struct {
+	suggestMode bool
+}
 
 func (m *mockChatModel) Generate(_ context.Context, _ []*schema.Message, _ ...model.Option) (*schema.Message, error) {
+	if m.suggestMode {
+		return &schema.Message{
+			Role: schema.Assistant,
+			ToolCalls: []schema.ToolCall{{
+				ID:   "call_suggest",
+				Type: "function",
+				Function: schema.FunctionCall{
+					Name:      "suggest_actions",
+					Arguments: `{"options":[{"label":"Look around","type":"explore"},{"label":"Wait quietly","type":"rest"}]}`,
+				},
+			}},
+		}, nil
+	}
 	return &schema.Message{
 		Role:    schema.Assistant,
 		Content: "You step into the darkness. The air is cold and damp.",
@@ -32,8 +56,13 @@ func (m *mockChatModel) Stream(_ context.Context, _ []*schema.Message, _ ...mode
 	return r, nil
 }
 
-func (m *mockChatModel) WithTools(_ []*schema.ToolInfo) (model.ToolCallingChatModel, error) {
-	return m, nil
+func (m *mockChatModel) WithTools(toolInfos []*schema.ToolInfo) (model.ToolCallingChatModel, error) {
+	for _, ti := range toolInfos {
+		if ti != nil && ti.Name == "suggest_actions" {
+			return &mockChatModel{suggestMode: true}, nil
+		}
+	}
+	return &mockChatModel{suggestMode: false}, nil
 }
 
 func setupTestWorld(t *testing.T) string {

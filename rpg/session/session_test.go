@@ -2,31 +2,62 @@ package session
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/cloudwego/eino/components/model"
+	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
 
 	worldmodel "github.com/sizolity/nobody/internal/world/model"
 	"github.com/sizolity/nobody/internal/world/store"
 	"github.com/sizolity/nobody/rpg/fog"
+	"github.com/sizolity/nobody/rpg/role"
 	"github.com/sizolity/nobody/rpg/rule"
+	"github.com/sizolity/nobody/rpg/tools"
 )
 
-// mockChatModel simulates a ToolCallingChatModel that:
-// 1st call: returns a tool call (roll d20)
-// 2nd call: returns the final narrative text
+// mockGM satisfies role.GM with deterministic, LLM-free behavior so the session
+// tests can focus on orchestration rather than prompt content. It uses the real
+// tools.NewInvokableTools (no progressive disclosure) so all tool calls exercised
+// by the ReAct mock — roll, explore_knowledge — are always available.
+type mockGM struct{}
+
+func (m *mockGM) Role() string { return "MockGM" }
+
+func (m *mockGM) SystemPrompt(_ []role.Player, opts role.PromptOptions) string {
+	return "You are a test GM. World: " + opts.WorldCtx.World.Name
+}
+
+func (m *mockGM) Tools(tc *tools.ToolContext) ([]tool.InvokableTool, error) {
+	return tools.NewInvokableTools(tc)
+}
+
+func (m *mockGM) Judge(_ context.Context, _ role.PlayerAction, _ worldmodel.World) (role.Judgment, error) {
+	return role.Judgment{Outcome: "success"}, nil
+}
+
+func (m *mockGM) SuggestActions(_ context.Context, _ worldmodel.World, _ []role.Player, _ string) (role.ActionChoices, error) {
+	return role.ActionChoices{
+		Options: []role.ActionOption{{Label: "test action", Type: role.ActionTypeExplore}},
+	}, nil
+}
+
+func (m *mockGM) Templates() []role.WorldTemplate { return nil }
+
+// mockChatModel simulates a ToolCallingChatModel:
+//
+//	1st call: returns a tool call (roll d20)
+//	2nd call: returns the final narrative text
 type mockChatModel struct {
 	callCount int
 	tools     []*schema.ToolInfo
 }
 
-func (m *mockChatModel) Generate(_ context.Context, input []*schema.Message, _ ...model.Option) (*schema.Message, error) {
+func (m *mockChatModel) Generate(_ context.Context, _ []*schema.Message, _ ...model.Option) (*schema.Message, error) {
 	m.callCount++
-
 	if m.callCount == 1 && len(m.tools) > 0 {
 		return &schema.Message{
 			Role: schema.Assistant,
@@ -42,7 +73,6 @@ func (m *mockChatModel) Generate(_ context.Context, input []*schema.Message, _ .
 			},
 		}, nil
 	}
-
 	return &schema.Message{
 		Role:    schema.Assistant,
 		Content: "The ancient door creaks open, revealing a dimly lit chamber. Your torch flickers as cold air rushes past. In the center, a stone pedestal holds a glowing crystal.",
@@ -50,13 +80,9 @@ func (m *mockChatModel) Generate(_ context.Context, input []*schema.Message, _ .
 }
 
 func (m *mockChatModel) Stream(_ context.Context, _ []*schema.Message, _ ...model.Option) (*schema.StreamReader[*schema.Message], error) {
-	msg := &schema.Message{
-		Role:    schema.Assistant,
-		Content: "Streaming not used in test.",
-	}
 	r, w := schema.Pipe[*schema.Message](1)
 	go func() {
-		w.Send(msg, nil)
+		w.Send(&schema.Message{Role: schema.Assistant, Content: "Streaming not used in test."}, nil)
 		w.Close()
 	}()
 	return r, nil
@@ -118,10 +144,18 @@ func setupTestWorld(t *testing.T) (string, worldmodel.World) {
 	return dir, world
 }
 
+func testPlayers() []role.Player {
+	return []role.Player{
+		{ID: "p1", CharacterID: "hero-arin", Name: "Tester"},
+	}
+}
+
 func TestRunBeat_FullPipeline(t *testing.T) {
 	dir, _ := setupTestWorld(t)
 
 	sess, err := New(Config{
+		GM:            &mockGM{},
+		Players:       testPlayers(),
 		WorkspacePath: dir,
 		ChatModel:     &mockChatModel{},
 		MaxStep:       5,
@@ -131,8 +165,11 @@ func TestRunBeat_FullPipeline(t *testing.T) {
 	}
 
 	output, err := sess.RunBeat(context.Background(), BeatInput{
-		WorldID:   "world-test-01",
-		UserInput: "I push open the ancient door.",
+		WorldID: "world-test-01",
+		Action: role.PlayerAction{
+			PlayerID: "p1",
+			Content:  "I push open the ancient door.",
+		},
 	})
 	if err != nil {
 		t.Fatalf("RunBeat: %v", err)
@@ -144,8 +181,10 @@ func TestRunBeat_FullPipeline(t *testing.T) {
 	if output.World.Clock.Sequence != 6 {
 		t.Errorf("expected clock sequence 6, got %d", output.World.Clock.Sequence)
 	}
+	if len(output.Choices.Options) == 0 {
+		t.Error("expected at least one suggested action option")
+	}
 
-	// Verify world was persisted
 	loaded, err := sess.LoadWorld(context.Background(), "world-test-01")
 	if err != nil {
 		t.Fatalf("load world: %v", err)
@@ -159,6 +198,8 @@ func TestRunBeat_WithToolCalls(t *testing.T) {
 	dir, _ := setupTestWorld(t)
 
 	sess, err := New(Config{
+		GM:            &mockGM{},
+		Players:       testPlayers(),
 		WorkspacePath: dir,
 		ChatModel:     &mockChatModel{},
 		MaxStep:       5,
@@ -168,8 +209,11 @@ func TestRunBeat_WithToolCalls(t *testing.T) {
 	}
 
 	output, err := sess.RunBeat(context.Background(), BeatInput{
-		WorldID:   "world-test-01",
-		UserInput: "I attack the stone golem.",
+		WorldID: "world-test-01",
+		Action: role.PlayerAction{
+			PlayerID: "p1",
+			Content:  "I attack the stone golem.",
+		},
 	})
 	if err != nil {
 		t.Fatalf("RunBeat: %v", err)
@@ -178,82 +222,27 @@ func TestRunBeat_WithToolCalls(t *testing.T) {
 	if output.Narrative == "" {
 		t.Error("expected non-empty narrative")
 	}
-	t.Logf("Narrative: %s", output.Narrative)
-	t.Logf("Effects: %d", len(output.ToolEffects))
+	if !strings.Contains(output.Narrative, "ancient door") {
+		t.Errorf("unexpected narrative: %q", output.Narrative)
+	}
 }
 
 func TestNew_Validation(t *testing.T) {
-	_, err := New(Config{})
-	if err == nil {
-		t.Fatal("expected error for empty config")
+	cases := []struct {
+		name string
+		cfg  Config
+	}{
+		{"empty config", Config{}},
+		{"missing GM", Config{WorkspacePath: "/tmp/test", ChatModel: &mockChatModel{}}},
+		{"missing workspace", Config{GM: &mockGM{}, ChatModel: &mockChatModel{}}},
+		{"missing chat model", Config{GM: &mockGM{}, WorkspacePath: "/tmp/test"}},
 	}
-
-	_, err = New(Config{WorkspacePath: "/tmp/test"})
-	if err == nil {
-		t.Fatal("expected error for missing ChatModel")
-	}
-}
-
-func TestApplyEffects(t *testing.T) {
-	world := worldmodel.World{
-		ID:   "w1",
-		Name: "Test",
-		Entities: map[worldmodel.EntityID]worldmodel.Entity{
-			"ent-1": {
-				ID: "ent-1", Type: "character", Name: "Hero",
-				State: map[string]worldmodel.Value{
-					"hp": {Kind: worldmodel.ValueKindNumber, Raw: float64(20)},
-				},
-			},
-		},
-	}
-
-	effects := []worldmodel.Effect{
-		{
-			Kind:     worldmodel.EffectUpdateEntityState,
-			TargetID: "ent-1",
-			Payload: map[string]worldmodel.Value{
-				"hp": {Kind: worldmodel.ValueKindNumber, Raw: float64(15)},
-			},
-		},
-	}
-
-	result := applyEffects(world, effects)
-	ent := result.Entities["ent-1"]
-	hp := ent.State["hp"]
-	if hp.Raw != float64(15) {
-		t.Errorf("expected hp=15, got %v", hp.Raw)
-	}
-}
-
-func TestBuildSystemPrompt(t *testing.T) {
-	_, world := setupTestWorld(t)
-	prompt := buildSystemPrompt(world, 5, false)
-	if prompt == "" {
-		t.Fatal("expected non-empty system prompt")
-	}
-	if !containsStr(prompt, "Crystal Caverns") {
-		t.Error("prompt should contain world name")
-	}
-	if !containsStr(prompt, "fantasy") {
-		t.Error("prompt should contain genre")
-	}
-	if !containsStr(prompt, "Attack rolls") {
-		t.Error("prompt should contain rules")
-	}
-	if containsStr(prompt, "Discovery Protocol") {
-		t.Error("fog disabled: should NOT contain discovery protocol")
-	}
-}
-
-func TestBuildSystemPrompt_WithFog(t *testing.T) {
-	_, world := setupTestWorld(t)
-	prompt := buildSystemPrompt(world, 5, true)
-	if !containsStr(prompt, "Discovery Protocol") {
-		t.Error("fog enabled: should contain discovery protocol")
-	}
-	if !containsStr(prompt, "explore_knowledge") {
-		t.Error("fog enabled: should reference explore_knowledge tool")
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if _, err := New(c.cfg); err == nil {
+				t.Fatalf("expected error for %s", c.name)
+			}
+		})
 	}
 }
 
@@ -286,20 +275,6 @@ func TestWorldPersistence(t *testing.T) {
 	}
 }
 
-func containsStr(s, sub string) bool {
-	return len(s) >= len(sub) && json.Valid([]byte("null")) && // compile check
-		findSubstr(s, sub)
-}
-
-func findSubstr(s, sub string) bool {
-	for i := 0; i <= len(s)-len(sub); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
-}
-
 // mockExploreModel returns an explore_knowledge tool call followed by narrative.
 type mockExploreModel struct {
 	callCount int
@@ -330,9 +305,8 @@ func (m *mockExploreModel) Generate(_ context.Context, _ []*schema.Message, _ ..
 }
 
 func (m *mockExploreModel) Stream(_ context.Context, _ []*schema.Message, _ ...model.Option) (*schema.StreamReader[*schema.Message], error) {
-	msg := &schema.Message{Role: schema.Assistant, Content: "stream"}
 	r, w := schema.Pipe[*schema.Message](1)
-	go func() { w.Send(msg, nil); w.Close() }()
+	go func() { w.Send(&schema.Message{Role: schema.Assistant, Content: "stream"}, nil); w.Close() }()
 	return r, nil
 }
 
@@ -342,10 +316,11 @@ func (m *mockExploreModel) WithTools(tools []*schema.ToolInfo) (model.ToolCallin
 
 func TestRunBeat_WithFog(t *testing.T) {
 	dir, _ := setupTestWorld(t)
-	rpgDir := filepath.Join(dir, "rpg")
+	// fog data now colocates with world data under {workspace}/worlds/{worldID}/
+	worldsDir := filepath.Join(dir, "worlds")
 
 	// Pre-seed disclosure: hero visible, loc-cavern hidden
-	fogStore := fog.NewStore(rpgDir)
+	fogStore := fog.NewStore(worldsDir)
 	initState := fog.DisclosureState{
 		Entities: map[worldmodel.EntityID]fog.EntityDisclosure{
 			"hero-arin": {Level: fog.Explored},
@@ -356,8 +331,9 @@ func TestRunBeat_WithFog(t *testing.T) {
 	}
 
 	sess, err := New(Config{
+		GM:            &mockGM{},
+		Players:       testPlayers(),
 		WorkspacePath: dir,
-		RPGDataDir:    rpgDir,
 		ChatModel:     &mockExploreModel{},
 		MaxStep:       5,
 		FogEnabled:    true,
@@ -367,8 +343,11 @@ func TestRunBeat_WithFog(t *testing.T) {
 	}
 
 	output, err := sess.RunBeat(context.Background(), BeatInput{
-		WorldID:   "world-test-01",
-		UserInput: "I explore the cavern entrance.",
+		WorldID: "world-test-01",
+		Action: role.PlayerAction{
+			PlayerID: "p1",
+			Content:  "I explore the cavern entrance.",
+		},
 	})
 	if err != nil {
 		t.Fatalf("RunBeat: %v", err)
@@ -378,7 +357,6 @@ func TestRunBeat_WithFog(t *testing.T) {
 		t.Error("expected narrative")
 	}
 
-	// Verify disclosure was persisted with loc-cavern now explored
 	updated, err := fogStore.Load("world-test-01")
 	if err != nil {
 		t.Fatalf("load disclosure: %v", err)

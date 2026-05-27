@@ -1,13 +1,23 @@
 // Package session orchestrates the RPG beat pipeline using Eino's ReAct agent.
-// The LLM acts as a Dungeon Master: it receives world context, decides what
-// happens narratively, and uses tools (roll dice, update state, lookup rules)
-// to maintain deterministic game mechanics.
+// The GM role (injected via role.GM) controls prompt generation, tool selection,
+// and action suggestion. See rpg/gm/ for concrete GM implementations.
+//
+// Session itself is pure orchestration — no LLM logic, no prompt construction,
+// no effect application. Each beat:
+//
+//  1. Loads the world (+ disclosure if fog enabled)
+//  2. Asks the GM for the disclosed toolset and the system prompt
+//  3. Runs the Eino ReAct agent with the resulting tools + prompt
+//  4. Applies any pending effects via internal/world/runtime.ApplyEvent
+//  5. Persists the updated world + disclosure
+//  6. Asks the GM to suggest next-step ActionChoices for the PL
 package session
 
 import (
 	"context"
 	"fmt"
 	"math/rand/v2"
+	"path/filepath"
 
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/components/tool"
@@ -16,25 +26,32 @@ import (
 	"github.com/cloudwego/eino/schema"
 
 	worldmodel "github.com/sizolity/nobody/internal/world/model"
+	worldruntime "github.com/sizolity/nobody/internal/world/runtime"
 	"github.com/sizolity/nobody/internal/world/store"
+	"github.com/sizolity/nobody/internal/world/view"
 	"github.com/sizolity/nobody/rpg/fog"
+	"github.com/sizolity/nobody/rpg/role"
 	"github.com/sizolity/nobody/rpg/tools"
 )
 
 // Session manages a single RPG game session tied to one world.
 type Session struct {
-	store     *store.FileStore
-	fogStore  *fog.Store
-	chatModel model.ToolCallingChatModel
-	rng       *rand.Rand
-	maxStep   int
+	gm         role.GM
+	players    []role.Player
+	store      *store.FileStore
+	fogStore   *fog.Store
+	runtime    worldruntime.Runtime
+	chatModel  model.ToolCallingChatModel
+	rng        *rand.Rand
+	maxStep    int
 	fogEnabled bool
 }
 
 // Config holds parameters for creating a new Session.
 type Config struct {
-	WorkspacePath string
-	RPGDataDir    string // base dir for rpg-specific data (disclosure.json, etc); defaults to WorkspacePath + "/rpg"
+	GM            role.GM
+	Players       []role.Player
+	WorkspacePath string // root for all data; worlds and fog data colocated under {WorkspacePath}/worlds/{worldID}/
 	ChatModel     model.ToolCallingChatModel
 	Rng           *rand.Rand
 	MaxStep       int  // max tool-calling iterations per beat (default 10)
@@ -42,6 +59,9 @@ type Config struct {
 }
 
 func New(cfg Config) (*Session, error) {
+	if cfg.GM == nil {
+		return nil, fmt.Errorf("GM is required")
+	}
 	if cfg.WorkspacePath == "" {
 		return nil, fmt.Errorf("workspace path is required")
 	}
@@ -56,13 +76,13 @@ func New(cfg Config) (*Session, error) {
 	if maxStep <= 0 {
 		maxStep = 10
 	}
-	rpgDataDir := cfg.RPGDataDir
-	if rpgDataDir == "" {
-		rpgDataDir = cfg.WorkspacePath + "/rpg"
-	}
+	worldsDir := filepath.Join(cfg.WorkspacePath, "worlds")
 	return &Session{
+		gm:         cfg.GM,
+		players:    cfg.Players,
 		store:      store.NewFileStore(cfg.WorkspacePath),
-		fogStore:   fog.NewStore(rpgDataDir),
+		fogStore:   fog.NewStore(worldsDir),
+		runtime:    worldruntime.NewRuntime(),
 		chatModel:  cfg.ChatModel,
 		rng:        rng,
 		maxStep:    maxStep,
@@ -73,7 +93,7 @@ func New(cfg Config) (*Session, error) {
 // BeatInput is the user-facing input for running a beat.
 type BeatInput struct {
 	WorldID      string
-	UserInput    string
+	Action       role.PlayerAction
 	RecentEvents int
 }
 
@@ -82,23 +102,16 @@ type BeatOutput struct {
 	World       worldmodel.World
 	Narrative   string
 	ToolEffects []worldmodel.Effect
+	Choices     role.ActionChoices
 }
 
-// RunBeat executes a single narrative beat via the Eino ReAct agent:
-// 1. Load world from store
-// 2. Adapt world → context (system prompt)
-// 3. Create ReAct agent with RPG tools bound to world state
-// 4. Agent generates narrative + executes tool calls automatically
-// 5. Collect pending effects from tool executions
-// 6. Apply effects to world state
-// 7. Persist the updated world
+// RunBeat executes a single narrative beat via the Eino ReAct agent.
 func (s *Session) RunBeat(ctx context.Context, input BeatInput) (BeatOutput, error) {
 	world, err := s.store.LoadSnapshot(ctx, input.WorldID)
 	if err != nil {
 		return BeatOutput{}, fmt.Errorf("load world: %w", err)
 	}
 
-	// Load disclosure state (fog of war)
 	var disclosure fog.DisclosureState
 	if s.fogEnabled {
 		disclosure, err = s.fogStore.Load(input.WorldID)
@@ -107,35 +120,56 @@ func (s *Session) RunBeat(ctx context.Context, input BeatInput) (BeatOutput, err
 		}
 	}
 
-	// Build tool context with optional disclosure reference
 	tc := &tools.ToolContext{World: world, Rng: s.rng}
 	if s.fogEnabled {
 		tc.Disclosure = &disclosure
 	}
-	invokableTools, err := tools.NewInvokableTools(tc)
+	invokableTools, err := s.gm.Tools(tc)
 	if err != nil {
 		return BeatOutput{}, fmt.Errorf("create tools: %w", err)
 	}
 
-	basTools := make([]tool.BaseTool, len(invokableTools))
+	baseTools := make([]tool.BaseTool, len(invokableTools))
 	for i, t := range invokableTools {
-		basTools[i] = t
+		baseTools[i] = t
 	}
 
-	// Apply fog filter: DM only sees revealed content
+	// Fog filter is applied to the PL-facing world view; the GM still sees the
+	// full world internally for narration consistency post-disclosure.
 	visibleWorld := world
 	if s.fogEnabled {
 		visibleWorld = fog.FilterWorld(world, disclosure)
 	}
 
-	systemPrompt := buildSystemPrompt(visibleWorld, input.RecentEvents, s.fogEnabled)
+	// Pre-render the three projections the GM consumes — keeps the GM free of
+	// raw model.World iteration.
+	worldCtx := view.WorldDebugView{}.Render(visibleWorld)
+	narrativeCtx := view.NarrativeView{}.Render(visibleWorld, view.NarrativeContextRequest{
+		RecentEventLimit: input.RecentEvents,
+	})
+	var charCtxs []view.CharacterContext
+	for _, p := range s.players {
+		if p.CharacterID == "" {
+			continue
+		}
+		if cc, err := (view.CharacterContextView{}).Render(visibleWorld, view.CharacterContextRequest{
+			PerspectiveID: p.CharacterID,
+		}); err == nil {
+			charCtxs = append(charCtxs, cc)
+		}
+	}
+
+	systemPrompt := s.gm.SystemPrompt(s.players, role.PromptOptions{
+		WorldCtx:     worldCtx,
+		NarrativeCtx: narrativeCtx,
+		CharacterCtx: charCtxs,
+		FogEnabled:   s.fogEnabled,
+	})
 
 	agent, err := react.NewAgent(ctx, &react.AgentConfig{
 		ToolCallingModel: s.chatModel,
-		ToolsConfig: compose.ToolsNodeConfig{
-			Tools: basTools,
-		},
-		MaxStep: s.maxStep,
+		ToolsConfig:      compose.ToolsNodeConfig{Tools: baseTools},
+		MaxStep:          s.maxStep,
 	})
 	if err != nil {
 		return BeatOutput{}, fmt.Errorf("create agent: %w", err)
@@ -143,7 +177,7 @@ func (s *Session) RunBeat(ctx context.Context, input BeatInput) (BeatOutput, err
 
 	messages := []*schema.Message{
 		schema.SystemMessage(systemPrompt),
-		schema.UserMessage(input.UserInput),
+		schema.UserMessage(input.Action.Content),
 	}
 
 	response, err := agent.Generate(ctx, messages)
@@ -152,24 +186,54 @@ func (s *Session) RunBeat(ctx context.Context, input BeatInput) (BeatOutput, err
 	}
 
 	effects := tc.GetPendingEffects()
-	world = applyEffects(world, effects)
+
+	// Apply effects via runtime.ApplyEvent (covers all 17 effect kinds + rule
+	// validation). The synthesized event captures the beat as a "note" sourced
+	// from user input — concrete EventTypes like Move/StatsChanged are emitted
+	// by world/system builders in future GMs.
+	if len(effects) > 0 {
+		toolEvent := worldmodel.WorldEvent{
+			ID:          worldmodel.EventID(fmt.Sprintf("beat_%s_%d", input.WorldID, world.Clock.Sequence)),
+			Type:        worldmodel.EventTypeNote,
+			Source:      worldmodel.EventSourceUser,
+			Description: "RPG beat tool effects",
+			Effects:     effects,
+		}
+		world, err = s.runtime.ApplyEvent(world, toolEvent)
+		if err != nil {
+			return BeatOutput{}, fmt.Errorf("apply effects: %w", err)
+		}
+	}
+
+	// Sequence increments once per beat regardless of effects, mirroring the
+	// pre-refactor behavior (one tick == one PL action).
 	world.Clock.Sequence++
 
 	if err := s.store.SaveSnapshot(ctx, world); err != nil {
 		return BeatOutput{}, fmt.Errorf("save world: %w", err)
 	}
 
-	// Persist updated disclosure state (explore_knowledge tool may have mutated it)
 	if s.fogEnabled {
 		if err := s.fogStore.Save(input.WorldID, disclosure); err != nil {
 			return BeatOutput{}, fmt.Errorf("save disclosure: %w", err)
 		}
 	}
 
+	// Re-filter post-effect world so SuggestActions only sees what the PL can.
+	visibleAfter := world
+	if s.fogEnabled {
+		visibleAfter = fog.FilterWorld(world, disclosure)
+	}
+	choices, err := s.gm.SuggestActions(ctx, visibleAfter, s.players, response.Content)
+	if err != nil {
+		return BeatOutput{}, fmt.Errorf("suggest actions: %w", err)
+	}
+
 	return BeatOutput{
 		World:       world,
 		Narrative:   response.Content,
 		ToolEffects: effects,
+		Choices:     choices,
 	}, nil
 }
 

@@ -7,11 +7,14 @@ import (
 
 	"github.com/cloudwego/eino/components/model"
 
+	"github.com/sizolity/nobody/rpg/gm/narrator"
+	"github.com/sizolity/nobody/rpg/role"
 	"github.com/sizolity/nobody/rpg/session"
 )
 
-// RunBeat dispatches the beat command. It runs a single narrative beat
-// through the Eino ReAct agent and outputs the resulting narrative.
+// RunBeat dispatches the beat command. It runs a single narrative beat through
+// the Eino ReAct agent driven by the Narrator GM, then prints the resulting
+// narrative and any LLM-suggested next actions.
 func RunBeat(ctx context.Context, args []string, stdout, stderr io.Writer, chatModel model.ToolCallingChatModel) int {
 	fs := newFlagSet("beat", stderr)
 	workspace := fs.String("workspace", "", "workspace directory")
@@ -30,7 +33,16 @@ func RunBeat(ctx context.Context, args []string, stdout, stderr io.Writer, chatM
 		return 1
 	}
 
+	gm, err := narrator.New(chatModel)
+	if err != nil {
+		fmt.Fprintf(stderr, "create narrator: %v\n", err)
+		return 1
+	}
+	player := role.Player{ID: "player-1", Name: "Player"}
+
 	sess, err := session.New(session.Config{
+		GM:            gm,
+		Players:       []role.Player{player},
 		WorkspacePath: *workspace,
 		ChatModel:     chatModel,
 		MaxStep:       *maxStep,
@@ -42,7 +54,7 @@ func RunBeat(ctx context.Context, args []string, stdout, stderr io.Writer, chatM
 
 	output, err := sess.RunBeat(ctx, session.BeatInput{
 		WorldID:      *worldID,
-		UserInput:    *userInput,
+		Action:       role.PlayerAction{PlayerID: player.ID, Content: *userInput},
 		RecentEvents: 10,
 	})
 	if err != nil {
@@ -51,6 +63,13 @@ func RunBeat(ctx context.Context, args []string, stdout, stderr io.Writer, chatM
 	}
 
 	fmt.Fprintln(stdout, output.Narrative)
+	if len(output.Choices.Options) > 0 {
+		fmt.Fprintln(stderr, "\nAvailable actions:")
+		for i, opt := range output.Choices.Options {
+			fmt.Fprintf(stderr, "  [%d] %s (%s)\n", i+1, opt.Label, opt.Type)
+		}
+		fmt.Fprintln(stderr, "  [*] Custom action (free text)")
+	}
 	fmt.Fprintf(stderr, "beat complete (sequence: %d, effects: %d)\n",
 		output.World.Clock.Sequence, len(output.ToolEffects))
 	return 0

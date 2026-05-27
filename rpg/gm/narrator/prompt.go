@@ -1,15 +1,15 @@
-package session
+package narrator
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/sizolity/nobody/internal/world/model"
-	"github.com/sizolity/nobody/rpg/rule"
+	"github.com/sizolity/nobody/rpg/role"
+	rpgrule "github.com/sizolity/nobody/rpg/rule"
 )
 
-const dmSystemTemplate = `You are the Dungeon Master (DM) for an interactive narrative RPG.
+const narratorSystemTemplate = `You are the Narrator for an interactive narrative RPG.
 
 ## World
 - Title: %s
@@ -62,46 +62,64 @@ When the player's actions logically reveal new knowledge, use "explore_knowledge
 NEVER fabricate entities that don't exist in the world. If the player asks about
 something you cannot see, narrate uncertainty rather than invention.`
 
-func buildSystemPrompt(w model.World, recentEvents int, fogEnabled bool) string {
-	genre := strings.Join(w.Canon.Genre, ", ")
-	tone := strings.Join(w.Canon.Tone, ", ")
+// SystemPrompt assembles the Narrator's LLM system prompt from pre-rendered
+// world projections in opts. WorldDebugContext supplies entities/rules/etc.
+// over the visible (post-fog) world; NarrativeContext supplies the filtered
+// event/thread slice. Callers do not template strings here.
+func (n *Narrator) SystemPrompt(players []role.Player, opts role.PromptOptions) string {
+	// players and opts.CharacterCtx are intentionally not rendered here: the
+	// migrated session/prompt.go had no per-player or character-perspective
+	// section, so the Narrator preserves that behavior. Future GMs (DM/KP) can
+	// override SystemPrompt to render per-PL framing without a signature break.
+	_ = players
+
+	wc := opts.WorldCtx
+	nc := opts.NarrativeCtx
+
+	genre := strings.Join(wc.World.Canon.Genre, ", ")
 	if genre == "" {
 		genre = "unspecified"
 	}
+	tone := strings.Join(wc.World.Canon.Tone, ", ")
 	if tone == "" {
 		tone = "unspecified"
 	}
 
 	fogSection := ""
-	if fogEnabled {
+	if opts.FogEnabled {
 		fogSection = discoveryProtocol
 	}
 
-	return fmt.Sprintf(dmSystemTemplate,
-		w.Name, genre, tone,
-		buildRulesSection(w.Rules),
-		buildCharactersSection(w.Entities),
-		buildLocationsSection(w.Entities),
-		buildEventsSection(w.EventLog, recentEvents),
-		buildThreadsSection(w.Threads),
+	return fmt.Sprintf(narratorSystemTemplate,
+		wc.World.Name, genre, tone,
+		buildRulesSection(wc.Rules),
+		buildCharactersSection(wc.Entities),
+		buildLocationsSection(wc.Entities),
+		buildEventsSection(nc.RecentEvents),
+		buildThreadsSection(nc.ActiveThreads),
 		fogSection,
 	)
 }
 
 func buildRulesSection(rules []model.Rule) string {
-	rpgRules := rule.FromWorldRules(rules)
+	rpgRules := rpgrule.FromWorldRules(rules)
 	if len(rpgRules) == 0 {
 		return "No specific rules defined."
 	}
-	section := rule.AssemblePromptSection(rpgRules)
+	section := rpgrule.AssemblePromptSection(rpgRules)
 	if section == "" {
 		return "No active rules."
 	}
 	return section
 }
 
-func buildCharactersSection(entities map[model.EntityID]model.Entity) string {
-	chars := sortedEntitiesByType(entities, "character")
+func buildCharactersSection(entities []model.Entity) string {
+	var chars []model.Entity
+	for _, e := range entities {
+		if e.Type == "character" {
+			chars = append(chars, e)
+		}
+	}
 	if len(chars) == 0 {
 		return "No characters present."
 	}
@@ -119,8 +137,13 @@ func buildCharactersSection(entities map[model.EntityID]model.Entity) string {
 	return b.String()
 }
 
-func buildLocationsSection(entities map[model.EntityID]model.Entity) string {
-	locs := sortedEntitiesByType(entities, "location")
+func buildLocationsSection(entities []model.Entity) string {
+	var locs []model.Entity
+	for _, e := range entities {
+		if e.Type == "location" {
+			locs = append(locs, e)
+		}
+	}
 	if len(locs) == 0 {
 		return "No locations defined."
 	}
@@ -135,16 +158,12 @@ func buildLocationsSection(entities map[model.EntityID]model.Entity) string {
 	return b.String()
 }
 
-func buildEventsSection(events []model.WorldEvent, limit int) string {
+func buildEventsSection(events []model.WorldEvent) string {
 	if len(events) == 0 {
 		return "No recent events."
 	}
-	if limit > 0 && len(events) > limit {
-		events = events[len(events)-limit:]
-	}
-	if len(events) > 10 {
-		events = events[len(events)-10:]
-	}
+	// Truncation lives in view.NarrativeView (RecentEventLimit). Re-truncating
+	// here would silently override caller intent — trust the view layer.
 	var b strings.Builder
 	for _, e := range events {
 		summary := e.Description
@@ -160,19 +179,11 @@ func buildEventsSection(events []model.WorldEvent, limit int) string {
 }
 
 func buildThreadsSection(threads []model.WorldThread) string {
-	active := make([]model.WorldThread, 0, len(threads))
-	for _, th := range threads {
-		switch th.Status {
-		case model.ThreadStatusResolved, model.ThreadStatusFailed, model.ThreadStatusAbandoned:
-			continue
-		}
-		active = append(active, th)
-	}
-	if len(active) == 0 {
+	if len(threads) == 0 {
 		return "No active story threads."
 	}
 	var b strings.Builder
-	for _, th := range active {
+	for _, th := range threads {
 		marker := " "
 		if th.Status == model.ThreadStatusActive {
 			marker = "→"
@@ -180,17 +191,4 @@ func buildThreadsSection(threads []model.WorldThread) string {
 		b.WriteString(fmt.Sprintf("%s [%s] %s: %s\n", marker, th.Status, th.Kind, th.Title))
 	}
 	return b.String()
-}
-
-func sortedEntitiesByType(entities map[model.EntityID]model.Entity, entityType string) []model.Entity {
-	out := make([]model.Entity, 0)
-	for _, e := range entities {
-		if e.Type == entityType {
-			out = append(out, e)
-		}
-	}
-	sort.Slice(out, func(i, j int) bool {
-		return out[i].ID < out[j].ID
-	})
-	return out
 }
