@@ -9,15 +9,21 @@
 //  2. Asks the GM for the disclosed toolset and the system prompt
 //  3. Runs the Eino ReAct agent with the resulting tools + prompt
 //  4. Applies any pending effects via internal/world/runtime.ApplyEvent
-//  5. Persists the updated world + disclosure
-//  6. Asks the GM to suggest next-step ActionChoices for the PL
+//  5. Runs the Lorekeeper (if configured) to extract structured world
+//     knowledge from the narrative and compile it into the snapshot.
+//     Failure is non-fatal; surfaces via BeatResult.LoreErr.
+//  6. Persists the updated world + disclosure
+//  7. Asks the GM to suggest next-step ActionChoices for the PL
 package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"math/rand/v2"
 	"path/filepath"
+	"strings"
 
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/components/tool"
@@ -25,6 +31,7 @@ import (
 	"github.com/cloudwego/eino/flow/agent/react"
 	"github.com/cloudwego/eino/schema"
 
+	"github.com/sizolity/nobody/internal/world/ingest"
 	worldmodel "github.com/sizolity/nobody/internal/world/model"
 	worldruntime "github.com/sizolity/nobody/internal/world/runtime"
 	"github.com/sizolity/nobody/internal/world/store"
@@ -42,6 +49,7 @@ type Session struct {
 	store      *store.FileStore
 	fogStore   *fog.Store
 	storyStore *story.Store
+	lorekeeper role.Lorekeeper
 	runtime    worldruntime.Runtime
 	chatModel  model.ToolCallingChatModel
 	rng        *rand.Rand
@@ -63,6 +71,12 @@ type Config struct {
 	// apply, applies emitted events, and persists updated lines. Default off
 	// keeps existing sessions unchanged.
 	StoryEnabled bool
+	// Lorekeeper is optional. When set, after each beat the lorekeeper
+	// extracts an ingest.Draft from the narrative and compiles it into
+	// the world snapshot. When nil, the lore pipeline is skipped entirely.
+	// Lorekeeper failure never aborts a beat — errors surface via
+	// BeatResult.LoreErr.
+	Lorekeeper role.Lorekeeper
 }
 
 func New(cfg Config) (*Session, error) {
@@ -89,6 +103,7 @@ func New(cfg Config) (*Session, error) {
 		players:    cfg.Players,
 		store:      store.NewFileStore(cfg.WorkspacePath),
 		fogStore:   fog.NewStore(worldsDir),
+		lorekeeper: cfg.Lorekeeper,
 		runtime:    worldruntime.NewRuntime(),
 		chatModel:  cfg.ChatModel,
 		rng:        rng,
@@ -108,26 +123,129 @@ type BeatInput struct {
 	RecentEvents int
 }
 
-// BeatOutput contains the results of running a beat.
-type BeatOutput struct {
-	World       worldmodel.World
+// BeatResult is the final outcome of a beat after the narrative stream has
+// fully drained. Callers receive it on BeatOutput.Done after iterating
+// BeatOutput.NarrativeStream to completion.
+type BeatResult struct {
+	// Err is set when the beat could not complete (load world, build tools,
+	// agent stream, persistence). The narrative stream may have partial
+	// content prior to the failure. Distinct from SuggestErr which is a
+	// graceful-degrade signal.
+	Err error
+
+	// World is the post-beat world snapshot. Zero-value when Err is set.
+	World worldmodel.World
+	// Narrative is the full concatenation of every chunk that was emitted
+	// to BeatOutput.NarrativeStream, in order. Convenient for callers that
+	// just want the final text (e.g. tests, Lorekeeper ingestion).
 	Narrative   string
 	ToolEffects []worldmodel.Effect
 	Choices     role.ActionChoices
+	// SuggestErr is non-nil when SuggestActions failed for this beat (e.g.
+	// transient LLM JSON error). The narrative and world updates have
+	// still been applied; Choices falls back to a single custom slot so
+	// the player can continue. Callers may surface this for visibility.
+	SuggestErr error
+	// LoreErr is non-nil when the Lorekeeper pipeline (Parse → Validate →
+	// Compile) failed for this beat. This is graceful-degrade signal,
+	// same status as SuggestErr: the narrative and tool-effects have
+	// still been applied; the world simply has no new ingested knowledge
+	// from this beat. Callers may surface this for logging.
+	LoreErr error
+	// LoreReport summarizes what the Lorekeeper extracted and compiled
+	// (Inserted / Skipped / Filtered / Rejected counts, Notes, Aliases).
+	// Zero-value when no Lorekeeper is configured or LoreErr is set.
+	LoreReport ingest.CompileReport
 }
 
-// RunBeat executes a single narrative beat via the Eino ReAct agent.
-func (s *Session) RunBeat(ctx context.Context, input BeatInput) (BeatOutput, error) {
+// BeatOutput exposes a beat's streaming narrative and its eventual final
+// result through two channels:
+//
+//   - NarrativeStream carries the narrative as a series of delta chunks
+//     (strings). It closes once the LLM finishes producing the narrative.
+//     Callers MUST drain it (e.g. `for chunk := range out.NarrativeStream`)
+//     before reading Done, otherwise the producing goroutine will block.
+//   - Done delivers exactly one BeatResult after the post-narrative
+//     pipeline (apply effects, worldline tick, save, suggest actions) has
+//     completed. The Done channel is buffered (size 1) so the producer
+//     never blocks on it.
+//
+// Typical usage:
+//
+//	out := sess.RunBeat(ctx, in)
+//	for chunk := range out.NarrativeStream {
+//	    fmt.Print(chunk)
+//	}
+//	result := <-out.Done
+//	if result.Err != nil { ... }
+//
+// Tests or other non-streaming callers can use BeatOutput.Wait() for a
+// one-shot synchronous result.
+type BeatOutput struct {
+	NarrativeStream <-chan string
+	Done            <-chan BeatResult
+}
+
+// Wait synchronously drains the narrative stream and returns the final
+// BeatResult. Use this in tests or scripts where streaming UX is not
+// required. The full narrative is still available via result.Narrative.
+//
+// Wait panics if called more than once on the same BeatOutput because
+// both channels are single-use.
+func (b BeatOutput) Wait() BeatResult {
+	for range b.NarrativeStream {
+		// discard chunks; result.Narrative carries the full text
+	}
+	return <-b.Done
+}
+
+// RunBeat starts a streaming beat. It returns immediately with a
+// BeatOutput whose channels expose the narrative chunks and the eventual
+// BeatResult; the caller MUST consume NarrativeStream to completion
+// before reading Done (see BeatOutput).
+//
+// All I/O and orchestration errors flow through BeatResult.Err on Done
+// rather than a separate error return value, so callers have a single
+// place to check for failure.
+func (s *Session) RunBeat(ctx context.Context, input BeatInput) BeatOutput {
+	narrativeCh := make(chan string, 32)
+	doneCh := make(chan BeatResult, 1)
+	go s.runBeatStream(ctx, input, narrativeCh, doneCh)
+	return BeatOutput{NarrativeStream: narrativeCh, Done: doneCh}
+}
+
+// runBeatStream is the goroutine body that executes a single beat. It
+// guarantees:
+//   - narrativeCh is always closed (even on early errors) so range loops
+//     in callers terminate.
+//   - doneCh receives exactly one BeatResult.
+//   - narrativeCh is closed BEFORE doneCh receives so the typical caller
+//     pattern (range NarrativeStream, then <-Done) does not deadlock.
+func (s *Session) runBeatStream(ctx context.Context, input BeatInput, narrativeCh chan<- string, doneCh chan<- BeatResult) {
+	var result BeatResult
+	defer func() {
+		close(narrativeCh)
+		doneCh <- result
+	}()
+	s.runBeatPipeline(ctx, input, narrativeCh, &result)
+}
+
+// runBeatPipeline contains the actual orchestration logic. Errors are
+// written into *result.Err and signal early termination; the deferred
+// cleanup in runBeatStream still closes channels and delivers the result.
+func (s *Session) runBeatPipeline(ctx context.Context, input BeatInput, narrativeCh chan<- string, result *BeatResult) {
 	world, err := s.store.LoadSnapshot(ctx, input.WorldID)
 	if err != nil {
-		return BeatOutput{}, fmt.Errorf("load world: %w", err)
+		result.Err = fmt.Errorf("load world: %w", err)
+		return
 	}
 
 	var disclosure fog.DisclosureState
 	if s.fogEnabled {
 		disclosure, err = s.fogStore.Load(input.WorldID)
 		if err != nil {
-			return BeatOutput{}, fmt.Errorf("load disclosure: %w", err)
+			result.Err = fmt.Errorf("load disclosure: %w", err)
+			return
 		}
 	}
 
@@ -137,7 +255,8 @@ func (s *Session) RunBeat(ctx context.Context, input BeatInput) (BeatOutput, err
 	}
 	invokableTools, err := s.gm.Tools(tc)
 	if err != nil {
-		return BeatOutput{}, fmt.Errorf("create tools: %w", err)
+		result.Err = fmt.Errorf("create tools: %w", err)
+		return
 	}
 
 	baseTools := make([]tool.BaseTool, len(invokableTools))
@@ -183,7 +302,8 @@ func (s *Session) RunBeat(ctx context.Context, input BeatInput) (BeatOutput, err
 		MaxStep:          s.maxStep,
 	})
 	if err != nil {
-		return BeatOutput{}, fmt.Errorf("create agent: %w", err)
+		result.Err = fmt.Errorf("create agent: %w", err)
+		return
 	}
 
 	messages := []*schema.Message{
@@ -191,29 +311,76 @@ func (s *Session) RunBeat(ctx context.Context, input BeatInput) (BeatOutput, err
 		schema.UserMessage(input.Action.Content),
 	}
 
-	response, err := agent.Generate(ctx, messages)
+	// Stream the ReAct agent's output instead of Generate. The stream
+	// yields delta chunks (see Eino's firstChunkStreamToolCallChecker
+	// which skips empty .Content chunks) — concatenating chunk.Content in
+	// order reconstructs the final narrative. Intermediate tool-call
+	// messages (chunks with ToolCalls set) are not forwarded to the UI;
+	// only narrative text chunks are surfaced to the caller.
+	stream, err := agent.Stream(ctx, messages)
 	if err != nil {
-		return BeatOutput{}, fmt.Errorf("agent generate: %w", err)
+		result.Err = fmt.Errorf("agent stream: %w", err)
+		return
+	}
+	defer stream.Close()
+
+	var narrativeBuf strings.Builder
+	for {
+		chunk, recvErr := stream.Recv()
+		if errors.Is(recvErr, io.EOF) {
+			break
+		}
+		if recvErr != nil {
+			result.Err = fmt.Errorf("agent stream recv: %w", recvErr)
+			return
+		}
+		if chunk == nil {
+			continue
+		}
+		// Ignore intermediate tool-call frames; only text chunks belong
+		// in the narrative shown to the player.
+		if len(chunk.ToolCalls) > 0 {
+			continue
+		}
+		if chunk.Content == "" {
+			continue
+		}
+		narrativeBuf.WriteString(chunk.Content)
+		// Block-send to the buffered channel; if the caller stops
+		// consuming we will pause here until ctx is canceled, which is
+		// the correct backpressure behavior.
+		select {
+		case <-ctx.Done():
+			result.Err = ctx.Err()
+			return
+		case narrativeCh <- chunk.Content:
+		}
 	}
 
+	narrative := narrativeBuf.String()
 	effects := tc.GetPendingEffects()
 
-	// Apply effects via runtime.ApplyEvent (covers all 17 effect kinds + rule
-	// validation). The synthesized event captures the beat as a "note" sourced
-	// from user input — concrete EventTypes like Move/StatsChanged are emitted
-	// by world/system builders in future GMs.
-	if len(effects) > 0 {
-		toolEvent := worldmodel.WorldEvent{
-			ID:          worldmodel.EventID(fmt.Sprintf("beat_%s_%d", input.WorldID, world.Clock.Sequence)),
-			Type:        worldmodel.EventTypeNote,
-			Source:      worldmodel.EventSourceUser,
-			Description: "RPG beat tool effects",
-			Effects:     effects,
-		}
-		world, err = s.runtime.ApplyEvent(world, toolEvent)
-		if err != nil {
-			return BeatOutput{}, fmt.Errorf("apply effects: %w", err)
-		}
+	// Synthesize a single per-beat event that captures BOTH the player's
+	// action and a summary of the narrator's response, plus any pending
+	// tool effects. This event is written unconditionally so that downstream
+	// beats can see what happened in prior turns via NarrativeView's
+	// RecentEvents — without it, beats where the LLM did not call tools
+	// would leave no trace in EventLog and the next prompt would have
+	// amnesia about the player's recent choices and the GM's narration.
+	//
+	// The narrative is truncated to keep the events section of the prompt
+	// bounded; the full narrative is still returned in BeatOutput.Narrative.
+	beatEvent := worldmodel.WorldEvent{
+		ID:          worldmodel.EventID(fmt.Sprintf("beat_%s_%d", input.WorldID, world.Clock.Sequence)),
+		Type:        worldmodel.EventTypeNote,
+		Source:      worldmodel.EventSourceUser,
+		Description: buildBeatEventDescription(input.Action.Content, narrative),
+		Effects:     effects,
+	}
+	world, err = s.runtime.ApplyEvent(world, beatEvent)
+	if err != nil {
+		result.Err = fmt.Errorf("apply beat event: %w", err)
+		return
 	}
 
 	// Sequence increments once per beat regardless of effects, mirroring the
@@ -227,7 +394,8 @@ func (s *Session) RunBeat(ctx context.Context, input BeatInput) (BeatOutput, err
 	if s.storyStore != nil {
 		lines, err := s.storyStore.Load(input.WorldID)
 		if err != nil {
-			return BeatOutput{}, fmt.Errorf("load worldlines: %w", err)
+			result.Err = fmt.Errorf("load worldlines: %w", err)
+			return
 		}
 		if len(lines) > 0 {
 			tickOut, err := story.Tick(story.TickInput{
@@ -236,27 +404,56 @@ func (s *Session) RunBeat(ctx context.Context, input BeatInput) (BeatOutput, err
 				TimeScale: world.Clock.Current.Kind,
 			}, s.rng)
 			if err != nil {
-				return BeatOutput{}, fmt.Errorf("worldline tick: %w", err)
+				result.Err = fmt.Errorf("worldline tick: %w", err)
+				return
 			}
 			for _, ev := range tickOut.Events {
 				world, err = s.runtime.ApplyEvent(world, ev)
 				if err != nil {
-					return BeatOutput{}, fmt.Errorf("apply worldline event: %w", err)
+					result.Err = fmt.Errorf("apply worldline event: %w", err)
+					return
 				}
 			}
 			if err := s.storyStore.Save(input.WorldID, tickOut.UpdatedLines); err != nil {
-				return BeatOutput{}, fmt.Errorf("save worldlines: %w", err)
+				result.Err = fmt.Errorf("save worldlines: %w", err)
+				return
 			}
 		}
 	}
 
+	// === Lorekeeper extraction ===
+	// Translate the just-streamed narrative into structured world
+	// knowledge (entities/relations/facts/threads/memories) and merge
+	// it into the world snapshot. Runs after player effects, clock
+	// advance, and WorldLine tick so the draft can reference any new
+	// events those steps produced. Failure here is non-fatal: the world
+	// remains in its post-effects state and the beat completes with
+	// LoreErr surfaced.
+	//
+	// Source-doc ID is beatEvent.ID by design: every lore item compiled
+	// from this beat is traceable back to the single EventLog entry that
+	// produced it (via CompileReport.Provenance.SourceRefs and any
+	// downstream caller that records the source doc). Do not change this
+	// without updating callers that rely on the invariant.
+	if s.lorekeeper != nil {
+		newWorld, report, loreErr := s.runLorekeeper(ctx, world, string(beatEvent.ID), narrative)
+		if loreErr != nil {
+			result.LoreErr = loreErr
+		} else {
+			world = newWorld
+			result.LoreReport = report
+		}
+	}
+
 	if err := s.store.SaveSnapshot(ctx, world); err != nil {
-		return BeatOutput{}, fmt.Errorf("save world: %w", err)
+		result.Err = fmt.Errorf("save world: %w", err)
+		return
 	}
 
 	if s.fogEnabled {
 		if err := s.fogStore.Save(input.WorldID, disclosure); err != nil {
-			return BeatOutput{}, fmt.Errorf("save disclosure: %w", err)
+			result.Err = fmt.Errorf("save disclosure: %w", err)
+			return
 		}
 	}
 
@@ -265,20 +462,129 @@ func (s *Session) RunBeat(ctx context.Context, input BeatInput) (BeatOutput, err
 	if s.fogEnabled {
 		visibleAfter = fog.FilterWorld(world, disclosure)
 	}
-	choices, err := s.gm.SuggestActions(ctx, visibleAfter, s.players, response.Content)
-	if err != nil {
-		return BeatOutput{}, fmt.Errorf("suggest actions: %w", err)
+	// SuggestActions is a "nice to have" — it shapes UX (suggested next
+	// options) but is not load-bearing for the world simulation. Errors
+	// here (transient LLM JSON failures, network blips during the second
+	// LLM call) must NOT discard the narrative and applied effects we
+	// already committed above. We surface the error via SuggestErr so the
+	// caller can log/display, and return an empty Choices set with just
+	// the custom slot so the player can still continue with free-form
+	// input.
+	choices, suggestErr := s.gm.SuggestActions(ctx, visibleAfter, s.players, narrative)
+	if suggestErr != nil {
+		choices = role.ActionChoices{
+			Options: []role.ActionOption{{Type: role.ActionTypeCustom}},
+		}
 	}
 
-	return BeatOutput{
-		World:       world,
-		Narrative:   response.Content,
-		ToolEffects: effects,
-		Choices:     choices,
-	}, nil
+	result.World = world
+	result.Narrative = narrative
+	result.ToolEffects = effects
+	result.Choices = choices
+	result.SuggestErr = suggestErr
+}
+
+// runLorekeeper drives the Parse → Validate → Compile pipeline for a
+// single beat. Returns the updated world on success and the input world
+// unchanged on error, alongside a CompileReport (non-zero on success,
+// zero on error) and an error value the caller treats as a soft-fail
+// signal.
+//
+// Return contract: on error, the input world is returned unchanged and
+// the CompileReport is zero-valued. This means a caller that ignores
+// the error and unconditionally assigns the returned world still gets a
+// valid, non-half-mutated world — the function is safe to misuse. The
+// current call site nonetheless gates assignment on the error so the
+// post-effects world flows through to SaveSnapshot only via the success
+// branch, which keeps intent explicit.
+//
+// sourceID is the SourceDocument.ID that the Lorekeeper will see; the
+// caller passes the beat event ID so compiled lore is traceable back to
+// the EventLog entry that produced it.
+//
+// ValidateDraft warnings are emitted via Notes in the returned
+// CompileReport so callers (CLI, tests) can surface them without
+// bringing their own validator. ValidateDraft errors are NOT a hard
+// abort — CompileDraft does per-item rejection so a malformed item
+// does not poison the whole draft. We still log Validate errors into
+// CompileReport.Notes so they show up alongside Compile-time rejects.
+func (s *Session) runLorekeeper(
+	ctx context.Context,
+	world worldmodel.World,
+	sourceID string,
+	narrative string,
+) (worldmodel.World, ingest.CompileReport, error) {
+	doc := ingest.SourceDocument{
+		ID:   sourceID,
+		Kind: "rpg_beat",
+		Text: narrative,
+	}
+	draft, err := s.lorekeeper.Parse(ctx, doc)
+	if err != nil {
+		return world, ingest.CompileReport{}, fmt.Errorf("lorekeeper extract: %w", err)
+	}
+	validation := ingest.ValidateDraft(draft)
+	newWorld, report, err := ingest.CompileDraft(world, draft, ingest.CompileOptions{
+		ConflictPolicy: ingest.ConflictPolicySkip,
+		// Resolver left nil: CompileDraft falls back to NoopAliasResolver.
+		// A narrator-driven AliasResolver for NPC name dedup is a future sub.
+	})
+	if err != nil {
+		return world, ingest.CompileReport{}, fmt.Errorf("lorekeeper compile: %w", err)
+	}
+	for _, e := range validation.Errors {
+		report.Notes = append(report.Notes, "validate-error: "+e)
+	}
+	for _, w := range validation.Warnings {
+		report.Notes = append(report.Notes, "validate-warn: "+w)
+	}
+	return newWorld, report, nil
 }
 
 // LoadWorld loads a world snapshot by ID.
 func (s *Session) LoadWorld(ctx context.Context, worldID string) (worldmodel.World, error) {
 	return s.store.LoadSnapshot(ctx, worldID)
+}
+
+// beatNarrativeBudget caps the per-beat narrative summary placed into the
+// EventLog. We size it large enough (in runes) that the *consequence* of a
+// player action — not just the opening flourish — survives into the next
+// beat's RecentEvents window. Empirically ~800 runes (~400 CJK characters)
+// keeps the rendered events section bounded while preserving the key
+// developments that the LLM needs to maintain narrative continuity.
+const beatNarrativeBudget = 800
+
+// buildBeatEventDescription assembles a compact "what happened in this beat"
+// summary for the EventLog. The downstream NarrativeView renders these as
+// "## Recent Events" entries on the next prompt, giving the GM continuity
+// across beats. We keep the player line verbatim (it's typically short) and
+// truncate the LLM narrative to a bounded prefix counted in runes (not
+// bytes) so multi-byte scripts are not chopped mid-character.
+func buildBeatEventDescription(playerAction, narrative string) string {
+	playerAction = strings.TrimSpace(playerAction)
+	summary := truncateRunes(strings.TrimSpace(narrative), beatNarrativeBudget)
+	switch {
+	case playerAction == "" && summary == "":
+		return "RPG beat (no input, no narrative)"
+	case playerAction == "":
+		return "Narrative: " + summary
+	case summary == "":
+		return "Player: " + playerAction
+	default:
+		return "Player: " + playerAction + "\nNarrative: " + summary
+	}
+}
+
+func truncateRunes(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	count := 0
+	for i := range s {
+		if count == n {
+			return s[:i] + "…"
+		}
+		count++
+	}
+	return s
 }

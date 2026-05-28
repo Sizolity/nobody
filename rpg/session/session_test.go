@@ -2,8 +2,10 @@ package session
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -11,6 +13,7 @@ import (
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
 
+	"github.com/sizolity/nobody/internal/world/ingest"
 	worldmodel "github.com/sizolity/nobody/internal/world/model"
 	"github.com/sizolity/nobody/internal/world/store"
 	"github.com/sizolity/nobody/rpg/fog"
@@ -46,12 +49,21 @@ func (m *mockGM) SuggestActions(_ context.Context, _ worldmodel.World, _ []role.
 	}, nil
 }
 
-func (m *mockGM) Templates() []role.WorldTemplate { return nil }
-
-// mockChatModel simulates a ToolCallingChatModel:
+// mockChatModel simulates a ToolCallingChatModel for both invocation paths
+// the session pipeline exercises:
 //
-//	1st call: returns a tool call (roll d20)
-//	2nd call: returns the final narrative text
+//   - Stream() — used by the ReAct agent. Two iterations:
+//     1st call returns a tool-call chunk (roll d20); 2nd call returns the
+//     final narrative chunk. The ReAct loop calls Stream once per
+//     iteration; firstChunkStreamToolCallChecker peeks ToolCalls on the
+//     first chunk to route between tool execution and narrative finish.
+//   - Generate() — used by Narrator.SuggestActions (non-streaming). Same
+//     two-call pattern as the original test predates the streaming
+//     migration; preserved so legacy callers (if any) still work.
+//
+// callCount is shared across Stream and Generate because both increment
+// once per LLM round; the test scenarios never mix the two on the same
+// instance (WithTools returns a fresh instance per bound tool set).
 type mockChatModel struct {
 	callCount int
 	tools     []*schema.ToolInfo
@@ -81,10 +93,29 @@ func (m *mockChatModel) Generate(_ context.Context, _ []*schema.Message, _ ...mo
 }
 
 func (m *mockChatModel) Stream(_ context.Context, _ []*schema.Message, _ ...model.Option) (*schema.StreamReader[*schema.Message], error) {
+	m.callCount++
+	isToolCallIter := m.callCount == 1 && len(m.tools) > 0
 	r, w := schema.Pipe[*schema.Message](1)
 	go func() {
-		w.Send(&schema.Message{Role: schema.Assistant, Content: "Streaming not used in test."}, nil)
-		w.Close()
+		defer w.Close()
+		if isToolCallIter {
+			w.Send(&schema.Message{
+				Role: schema.Assistant,
+				ToolCalls: []schema.ToolCall{{
+					ID:   "call_1",
+					Type: "function",
+					Function: schema.FunctionCall{
+						Name:      "roll",
+						Arguments: `{"sides":20,"count":1,"modifier":2}`,
+					},
+				}},
+			}, nil)
+			return
+		}
+		w.Send(&schema.Message{
+			Role:    schema.Assistant,
+			Content: "The ancient door creaks open, revealing a dimly lit chamber. Your torch flickers as cold air rushes past. In the center, a stone pedestal holds a glowing crystal.",
+		}, nil)
 	}()
 	return r, nil
 }
@@ -165,24 +196,24 @@ func TestRunBeat_FullPipeline(t *testing.T) {
 		t.Fatalf("create session: %v", err)
 	}
 
-	output, err := sess.RunBeat(context.Background(), BeatInput{
+	result := sess.RunBeat(context.Background(), BeatInput{
 		WorldID: "world-test-01",
 		Action: role.PlayerAction{
 			PlayerID: "p1",
 			Content:  "I push open the ancient door.",
 		},
-	})
-	if err != nil {
-		t.Fatalf("RunBeat: %v", err)
+	}).Wait()
+	if result.Err != nil {
+		t.Fatalf("RunBeat: %v", result.Err)
 	}
 
-	if output.Narrative == "" {
+	if result.Narrative == "" {
 		t.Error("expected non-empty narrative")
 	}
-	if output.World.Clock.Sequence != 6 {
-		t.Errorf("expected clock sequence 6, got %d", output.World.Clock.Sequence)
+	if result.World.Clock.Sequence != 6 {
+		t.Errorf("expected clock sequence 6, got %d", result.World.Clock.Sequence)
 	}
-	if len(output.Choices.Options) == 0 {
+	if len(result.Choices.Options) == 0 {
 		t.Error("expected at least one suggested action option")
 	}
 
@@ -209,22 +240,22 @@ func TestRunBeat_WithToolCalls(t *testing.T) {
 		t.Fatalf("create session: %v", err)
 	}
 
-	output, err := sess.RunBeat(context.Background(), BeatInput{
+	result := sess.RunBeat(context.Background(), BeatInput{
 		WorldID: "world-test-01",
 		Action: role.PlayerAction{
 			PlayerID: "p1",
 			Content:  "I attack the stone golem.",
 		},
-	})
-	if err != nil {
-		t.Fatalf("RunBeat: %v", err)
+	}).Wait()
+	if result.Err != nil {
+		t.Fatalf("RunBeat: %v", result.Err)
 	}
 
-	if output.Narrative == "" {
+	if result.Narrative == "" {
 		t.Error("expected non-empty narrative")
 	}
-	if !strings.Contains(output.Narrative, "ancient door") {
-		t.Errorf("unexpected narrative: %q", output.Narrative)
+	if !strings.Contains(result.Narrative, "ancient door") {
+		t.Errorf("unexpected narrative: %q", result.Narrative)
 	}
 }
 
@@ -276,7 +307,10 @@ func TestWorldPersistence(t *testing.T) {
 	}
 }
 
-// mockExploreModel returns an explore_knowledge tool call followed by narrative.
+// mockExploreModel returns an explore_knowledge tool call followed by
+// narrative. Mirrors mockChatModel's two-iteration pattern but for the
+// fog-disclosure tool — see TestRunBeat_WithFog which verifies that
+// invoking the explore_knowledge tool flips the cavern to Explored.
 type mockExploreModel struct {
 	callCount int
 	tools     []*schema.ToolInfo
@@ -306,8 +340,30 @@ func (m *mockExploreModel) Generate(_ context.Context, _ []*schema.Message, _ ..
 }
 
 func (m *mockExploreModel) Stream(_ context.Context, _ []*schema.Message, _ ...model.Option) (*schema.StreamReader[*schema.Message], error) {
+	m.callCount++
+	isToolCallIter := m.callCount == 1 && len(m.tools) > 0
 	r, w := schema.Pipe[*schema.Message](1)
-	go func() { w.Send(&schema.Message{Role: schema.Assistant, Content: "stream"}, nil); w.Close() }()
+	go func() {
+		defer w.Close()
+		if isToolCallIter {
+			w.Send(&schema.Message{
+				Role: schema.Assistant,
+				ToolCalls: []schema.ToolCall{{
+					ID:   "call_fog",
+					Type: "function",
+					Function: schema.FunctionCall{
+						Name:      "explore_knowledge",
+						Arguments: `{"target_id":"loc-cavern","level":"explored"}`,
+					},
+				}},
+			}, nil)
+			return
+		}
+		w.Send(&schema.Message{
+			Role:    schema.Assistant,
+			Content: "You discover the Ancient Cavern in full detail.",
+		}, nil)
+	}()
 	return r, nil
 }
 
@@ -343,18 +399,18 @@ func TestRunBeat_WithFog(t *testing.T) {
 		t.Fatalf("create session: %v", err)
 	}
 
-	output, err := sess.RunBeat(context.Background(), BeatInput{
+	result := sess.RunBeat(context.Background(), BeatInput{
 		WorldID: "world-test-01",
 		Action: role.PlayerAction{
 			PlayerID: "p1",
 			Content:  "I explore the cavern entrance.",
 		},
-	})
-	if err != nil {
-		t.Fatalf("RunBeat: %v", err)
+	}).Wait()
+	if result.Err != nil {
+		t.Fatalf("RunBeat: %v", result.Err)
 	}
 
-	if output.Narrative == "" {
+	if result.Narrative == "" {
 		t.Error("expected narrative")
 	}
 
@@ -434,20 +490,20 @@ func TestRunBeat_WorldLine_DriftAndMilestone(t *testing.T) {
 		t.Fatalf("create session: %v", err)
 	}
 
-	output, err := sess.RunBeat(context.Background(), BeatInput{
+	result := sess.RunBeat(context.Background(), BeatInput{
 		WorldID: "world-test-01",
 		Action: role.PlayerAction{
 			PlayerID: "p1",
 			Content:  "I peer deeper into the cavern.",
 		},
-	})
-	if err != nil {
-		t.Fatalf("RunBeat: %v", err)
+	}).Wait()
+	if result.Err != nil {
+		t.Fatalf("RunBeat: %v", result.Err)
 	}
 
 	// Thread tension should have drifted from 0.5 → 0.75 (clamped).
 	var th worldmodel.WorldThread
-	for _, x := range output.World.Threads {
+	for _, x := range result.World.Threads {
 		if x.ID == "thread-explore" {
 			th = x
 		}
@@ -470,17 +526,17 @@ func TestRunBeat_WorldLine_DriftAndMilestone(t *testing.T) {
 
 	// Second beat: tension already at 0.75; further drift to 1.0; milestone
 	// already triggered → no second milestone event but tension still ticks.
-	output2, err := sess.RunBeat(context.Background(), BeatInput{
+	result2 := sess.RunBeat(context.Background(), BeatInput{
 		WorldID: "world-test-01",
 		Action: role.PlayerAction{
 			PlayerID: "p1",
 			Content:  "I press on.",
 		},
-	})
-	if err != nil {
-		t.Fatalf("RunBeat #2: %v", err)
+	}).Wait()
+	if result2.Err != nil {
+		t.Fatalf("RunBeat #2: %v", result2.Err)
 	}
-	for _, x := range output2.World.Threads {
+	for _, x := range result2.World.Threads {
 		if x.ID == "thread-explore" {
 			if x.Tension < 0.99 {
 				t.Errorf("expected tension near 1.0 after second drift, got %v", x.Tension)
@@ -509,15 +565,263 @@ func TestRunBeat_WorldLineDisabled_NoFile(t *testing.T) {
 		t.Fatalf("create session: %v", err)
 	}
 
-	if _, err := sess.RunBeat(context.Background(), BeatInput{
+	if result := (sess.RunBeat(context.Background(), BeatInput{
 		WorldID: "world-test-01",
 		Action:  role.PlayerAction{PlayerID: "p1", Content: "x"},
-	}); err != nil {
-		t.Fatalf("RunBeat: %v", err)
+	})).Wait(); result.Err != nil {
+		t.Fatalf("RunBeat: %v", result.Err)
 	}
 
 	path := filepath.Join(dir, "worlds", "world-test-01", "worldlines.json")
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Errorf("expected no worldlines.json when StoryEnabled=false, stat=%v", err)
+	}
+}
+
+// === Lorekeeper integration (Sub 3) ===
+
+// mockLorekeeper satisfies role.Lorekeeper (= ingest.Parser) with fully
+// scripted Parse output. It records the call count and the last
+// SourceDocument so tests can assert the session built the doc correctly
+// (ID = beat_<worldID>_<seq>, Kind = "rpg_beat", non-empty Text).
+type mockLorekeeper struct {
+	draft   ingest.Draft
+	err     error
+	calls   int
+	lastDoc ingest.SourceDocument
+}
+
+func (m *mockLorekeeper) Parse(_ context.Context, doc ingest.SourceDocument) (ingest.Draft, error) {
+	m.calls++
+	m.lastDoc = doc
+	if m.err != nil {
+		return ingest.Draft{}, m.err
+	}
+	return m.draft, nil
+}
+
+func TestRunBeat_LorekeeperDisabled(t *testing.T) {
+	dir, baseWorld := setupTestWorld(t)
+
+	sess, err := New(Config{
+		GM:            &mockGM{},
+		Players:       testPlayers(),
+		WorkspacePath: dir,
+		ChatModel:     &mockChatModel{},
+		MaxStep:       5,
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	result := sess.RunBeat(context.Background(), BeatInput{
+		WorldID: "world-test-01",
+		Action:  role.PlayerAction{PlayerID: "p1", Content: "I look around."},
+	}).Wait()
+	if result.Err != nil {
+		t.Fatalf("RunBeat: %v", result.Err)
+	}
+	if result.LoreErr != nil {
+		t.Errorf("expected nil LoreErr when Lorekeeper unset, got %v", result.LoreErr)
+	}
+	if !reflect.DeepEqual(result.LoreReport, ingest.CompileReport{}) {
+		t.Errorf("expected zero-value LoreReport, got %+v", result.LoreReport)
+	}
+
+	loaded, err := sess.LoadWorld(context.Background(), "world-test-01")
+	if err != nil {
+		t.Fatalf("load world: %v", err)
+	}
+	if len(loaded.Entities) != len(baseWorld.Entities) {
+		t.Errorf("expected entity count unchanged (%d), got %d", len(baseWorld.Entities), len(loaded.Entities))
+	}
+}
+
+func TestRunBeat_LorekeeperSuccess(t *testing.T) {
+	dir, _ := setupTestWorld(t)
+	lk := &mockLorekeeper{
+		draft: ingest.Draft{
+			Entities: []ingest.DraftEntity{{
+				ID:         "ent_crystal_keeper",
+				Type:       "character",
+				Name:       "Crystal Keeper",
+				Confidence: 0.9,
+			}},
+		},
+	}
+
+	sess, err := New(Config{
+		GM:            &mockGM{},
+		Players:       testPlayers(),
+		WorkspacePath: dir,
+		ChatModel:     &mockChatModel{},
+		MaxStep:       5,
+		Lorekeeper:    lk,
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	result := sess.RunBeat(context.Background(), BeatInput{
+		WorldID: "world-test-01",
+		Action:  role.PlayerAction{PlayerID: "p1", Content: "I greet the keeper."},
+	}).Wait()
+	if result.Err != nil {
+		t.Fatalf("RunBeat: %v", result.Err)
+	}
+	if result.LoreErr != nil {
+		t.Errorf("expected nil LoreErr, got %v", result.LoreErr)
+	}
+	if result.LoreReport.Inserted != 1 {
+		t.Errorf("expected Inserted=1, got %d (report=%+v)", result.LoreReport.Inserted, result.LoreReport)
+	}
+
+	if got, ok := result.World.Entities["ent_crystal_keeper"]; !ok {
+		t.Error("expected ent_crystal_keeper in result.World, missing")
+	} else if got.Name != "Crystal Keeper" {
+		t.Errorf("expected Name=Crystal Keeper, got %q", got.Name)
+	}
+
+	loaded, err := sess.LoadWorld(context.Background(), "world-test-01")
+	if err != nil {
+		t.Fatalf("load world: %v", err)
+	}
+	if got, ok := loaded.Entities["ent_crystal_keeper"]; !ok {
+		t.Error("expected ent_crystal_keeper persisted in FileStore, missing")
+	} else if got.Name != "Crystal Keeper" {
+		t.Errorf("persisted Name=Crystal Keeper expected, got %q", got.Name)
+	}
+
+	if lk.calls != 1 {
+		t.Errorf("expected mockLorekeeper.calls == 1, got %d", lk.calls)
+	}
+	// Pre-increment Clock.Sequence at setup is 5 → beat event id uses 5.
+	wantID := "beat_world-test-01_5"
+	if lk.lastDoc.ID != wantID {
+		t.Errorf("expected SourceDocument.ID = %q, got %q", wantID, lk.lastDoc.ID)
+	}
+	if lk.lastDoc.Kind != "rpg_beat" {
+		t.Errorf("expected SourceDocument.Kind = %q, got %q", "rpg_beat", lk.lastDoc.Kind)
+	}
+	if lk.lastDoc.Text == "" {
+		t.Error("expected non-empty SourceDocument.Text")
+	}
+}
+
+func TestRunBeat_LorekeeperParseFails(t *testing.T) {
+	dir, _ := setupTestWorld(t)
+	lk := &mockLorekeeper{err: errors.New("synthetic lore failure")}
+
+	sess, err := New(Config{
+		GM:            &mockGM{},
+		Players:       testPlayers(),
+		WorkspacePath: dir,
+		ChatModel:     &mockChatModel{},
+		MaxStep:       5,
+		Lorekeeper:    lk,
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	result := sess.RunBeat(context.Background(), BeatInput{
+		WorldID: "world-test-01",
+		Action:  role.PlayerAction{PlayerID: "p1", Content: "Trigger a lore failure."},
+	}).Wait()
+	if result.Err != nil {
+		t.Fatalf("expected RunBeat to succeed despite lore failure, got %v", result.Err)
+	}
+	if result.LoreErr == nil {
+		t.Fatal("expected LoreErr to be non-nil")
+	}
+	if !strings.Contains(result.LoreErr.Error(), "lorekeeper extract") {
+		t.Errorf("expected LoreErr to wrap 'lorekeeper extract', got %v", result.LoreErr)
+	}
+	if !reflect.DeepEqual(result.LoreReport, ingest.CompileReport{}) {
+		t.Errorf("expected zero-value LoreReport on parse failure, got %+v", result.LoreReport)
+	}
+	if result.Narrative == "" {
+		t.Error("expected narrative to survive lore failure (graceful degrade)")
+	}
+
+	loaded, err := sess.LoadWorld(context.Background(), "world-test-01")
+	if err != nil {
+		t.Fatalf("load world: %v", err)
+	}
+	if loaded.Clock.Sequence != 6 {
+		t.Errorf("expected clock sequence advanced to 6, got %d", loaded.Clock.Sequence)
+	}
+	if _, ok := loaded.Entities["ent_crystal_keeper"]; ok {
+		t.Error("expected NO new entities from failed extraction")
+	}
+	if lk.calls != 1 {
+		t.Errorf("expected mockLorekeeper.calls == 1, got %d", lk.calls)
+	}
+}
+
+func TestRunBeat_LorekeeperReportNotesIncludeValidate(t *testing.T) {
+	dir, _ := setupTestWorld(t)
+	// One valid entity (Inserted=1) plus one entity with empty Name. The
+	// empty-Name case triggers both ValidateDraft (Errors: "name is
+	// required") and CompileDraft's per-item entity.Validate() rejection,
+	// so report.Notes ends up with both a "validate-error:" prefix from
+	// runLorekeeper AND a per-item reject note from CompileDraft.
+	lk := &mockLorekeeper{
+		draft: ingest.Draft{
+			Entities: []ingest.DraftEntity{
+				{
+					ID:         "ent_valid_npc",
+					Type:       "character",
+					Name:       "Valid NPC",
+					Confidence: 0.9,
+				},
+				{
+					ID:         "ent_no_name",
+					Type:       "character",
+					Name:       "",
+					Confidence: 0.9,
+				},
+			},
+		},
+	}
+
+	sess, err := New(Config{
+		GM:            &mockGM{},
+		Players:       testPlayers(),
+		WorkspacePath: dir,
+		ChatModel:     &mockChatModel{},
+		MaxStep:       5,
+		Lorekeeper:    lk,
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	result := sess.RunBeat(context.Background(), BeatInput{
+		WorldID: "world-test-01",
+		Action:  role.PlayerAction{PlayerID: "p1", Content: "Stress test the validator."},
+	}).Wait()
+	if result.Err != nil {
+		t.Fatalf("RunBeat: %v", result.Err)
+	}
+	if result.LoreErr != nil {
+		t.Fatalf("expected nil LoreErr, got %v", result.LoreErr)
+	}
+	if result.LoreReport.Inserted != 1 {
+		t.Errorf("expected Inserted=1 (only the valid entity), got %d (report=%+v)", result.LoreReport.Inserted, result.LoreReport)
+	}
+
+	var hasValidateNote bool
+	for _, n := range result.LoreReport.Notes {
+		if strings.HasPrefix(n, "validate-error:") || strings.HasPrefix(n, "validate-warn:") {
+			hasValidateNote = true
+			break
+		}
+	}
+	if !hasValidateNote {
+		t.Errorf("expected at least one validate-{error,warn}: note, got Notes=%v", result.LoreReport.Notes)
+	}
+	if lk.calls != 1 {
+		t.Errorf("expected mockLorekeeper.calls == 1, got %d", lk.calls)
 	}
 }

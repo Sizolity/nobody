@@ -52,20 +52,27 @@ func RunBeat(ctx context.Context, args []string, stdout, stderr io.Writer, chatM
 		return 1
 	}
 
-	output, err := sess.RunBeat(ctx, session.BeatInput{
+	out := sess.RunBeat(ctx, session.BeatInput{
 		WorldID:      *worldID,
 		Action:       role.PlayerAction{PlayerID: player.ID, Content: *userInput},
 		RecentEvents: 10,
 	})
-	if err != nil {
-		fmt.Fprintf(stderr, "beat failed: %v\n", err)
+	// Stream the narrative to stdout as it arrives so manual users see
+	// progress; the full text is also available via result.Narrative for
+	// any downstream consumers.
+	for chunk := range out.NarrativeStream {
+		fmt.Fprint(stdout, chunk)
+	}
+	fmt.Fprintln(stdout)
+	result := <-out.Done
+	if result.Err != nil {
+		fmt.Fprintf(stderr, "beat failed: %v\n", result.Err)
 		return 1
 	}
 
-	fmt.Fprintln(stdout, output.Narrative)
-	if len(output.Choices.Options) > 0 {
+	if len(result.Choices.Options) > 0 {
 		fmt.Fprintln(stderr, "\nAvailable actions:")
-		for i, opt := range output.Choices.Options {
+		for i, opt := range result.Choices.Options {
 			if opt.Type == role.ActionTypeCustom {
 				fmt.Fprintf(stderr, "  [%d]\n", i+1)
 			} else {
@@ -74,6 +81,6 @@ func RunBeat(ctx context.Context, args []string, stdout, stderr io.Writer, chatM
 		}
 	}
 	fmt.Fprintf(stderr, "beat complete (sequence: %d, effects: %d)\n",
-		output.World.Clock.Sequence, len(output.ToolEffects))
+		result.World.Clock.Sequence, len(result.ToolEffects))
 	return 0
 }

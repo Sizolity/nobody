@@ -22,11 +22,13 @@ type suggestParams struct {
 	Options []role.ActionOption `json:"options" jsonschema:"required,description=2-4 contextual action options for the player"`
 }
 
-const suggestSystemPrompt = `你是 RPG 行动建议器。根据提供的世界规则、场景实体、活跃线索和最新叙事，调用 suggest_actions 工具返回行动选项。
+const suggestSystemPrompt = `你是 RPG 行动建议器。根据提供的世界规则、场景实体、活跃线索、最新叙事和近期玩家行动历史，调用 suggest_actions 工具返回行动选项。
 
 规则：
 - 返回 2-4 个具体选项，类型多样（explore / social / combat / investigate / use_item / rest）
-- 与当前叙事情境紧密相关，不重复
+- 与当前叙事情境紧密相关
+- 必须代表「下一步剧情推进的新方向」，不要给玩家"重做上一回合动作的变体"
+- 仔细审查 ## 近期玩家行动 段：若玩家最近 3 回合已经做过某类行动（如"变飞虫窥探"、"召土地神问话"、"现本相"），不要再以微调措辞形式重复出现；优先建议尚未尝试过的方向
 - 绝大多数场景（战斗、探索、社交、调查等）都应该在末尾追加一个 type="custom"、label="" 的空选项，允许玩家自由发挥
 - 仅当场景是「关键剧情节点」时才省略 custom 选项。关键剧情节点的定义：玩家的选择将不可逆地决定整条故事线走向（例如：背叛盟友还是保持忠诚、毁灭圣物还是保留、在两个阵营间做最终抉择）。普通的战斗遭遇、探索发现、NPC 对话都不算关键剧情节点
 不要在工具调用之外输出文本。`
@@ -70,12 +72,20 @@ func (n *Narrator) SuggestActions(ctx context.Context, w model.World, players []
 }
 
 // buildSuggestPrompt assembles the LLM user-message context: latest narrative,
-// scene entities, active threads, enabled rules, and player roster.
+// recent player actions (to avoid suggesting variants of what's already been
+// done), scene entities, active threads, enabled rules, and player roster.
 func buildSuggestPrompt(w model.World, players []role.Player, narrative string) string {
 	var b strings.Builder
 
 	b.WriteString("## 最新叙事\n")
 	b.WriteString(narrative)
+
+	if recent := recentPlayerActions(w.EventLog, 5); len(recent) > 0 {
+		b.WriteString("\n\n## 近期玩家行动（避免重复变体）\n")
+		for _, a := range recent {
+			fmt.Fprintf(&b, "- %s\n", a)
+		}
+	}
 
 	b.WriteString("\n\n## 场景实体\n")
 	if len(w.Entities) == 0 {
@@ -118,6 +128,35 @@ func activeThreads(threads []model.WorldThread) []model.WorldThread {
 		case model.ThreadStatusActive, model.ThreadStatusOpen:
 			out = append(out, th)
 		}
+	}
+	return out
+}
+
+// recentPlayerActions extracts up to `limit` most-recent "Player: ..." lines
+// from EventLog descriptions (written by session.RunBeat) so the suggester
+// can avoid proposing rewordings of actions the player already took. The
+// returned slice is ordered most-recent-first.
+func recentPlayerActions(events []model.WorldEvent, limit int) []string {
+	if limit <= 0 || len(events) == 0 {
+		return nil
+	}
+	const prefix = "Player: "
+	out := make([]string, 0, limit)
+	for i := len(events) - 1; i >= 0 && len(out) < limit; i-- {
+		desc := events[i].Description
+		if !strings.HasPrefix(desc, prefix) {
+			continue
+		}
+		// Trim to the first newline (player action line only, not narrative).
+		line := desc[len(prefix):]
+		if nl := strings.IndexByte(line, '\n'); nl >= 0 {
+			line = line[:nl]
+		}
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		out = append(out, line)
 	}
 	return out
 }

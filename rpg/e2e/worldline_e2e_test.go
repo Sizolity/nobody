@@ -118,7 +118,7 @@ func TestBeat_DeepSeek_WorldLine_E2E(t *testing.T) {
 
 	// --- Beat 1 ---
 	t.Log("=== Beat 1 ===")
-	out1, err := sess.RunBeat(ctx, session.BeatInput{
+	stream1 := sess.RunBeat(ctx, session.BeatInput{
 		WorldID: string(world.ID),
 		Action: role.PlayerAction{
 			PlayerID: player.ID,
@@ -126,10 +126,10 @@ func TestBeat_DeepSeek_WorldLine_E2E(t *testing.T) {
 		},
 		RecentEvents: 5,
 	})
-	if err != nil {
-		t.Fatalf("RunBeat #1: %v", err)
+	out1 := drainBeat(t, 1, stream1)
+	if out1.Err != nil {
+		t.Fatalf("RunBeat #1: %v", out1.Err)
 	}
-	printBeat(t, 1, out1)
 
 	tensionAfter1 := findThreadTension(out1.World, "thread-seal")
 	t.Logf("thread-seal tension after beat 1: %.3f", tensionAfter1)
@@ -150,7 +150,7 @@ func TestBeat_DeepSeek_WorldLine_E2E(t *testing.T) {
 
 	// --- Beat 2 ---
 	t.Log("=== Beat 2 ===")
-	out2, err := sess.RunBeat(ctx, session.BeatInput{
+	stream2 := sess.RunBeat(ctx, session.BeatInput{
 		WorldID: string(world.ID),
 		Action: role.PlayerAction{
 			PlayerID: player.ID,
@@ -158,10 +158,10 @@ func TestBeat_DeepSeek_WorldLine_E2E(t *testing.T) {
 		},
 		RecentEvents: 5,
 	})
-	if err != nil {
-		t.Fatalf("RunBeat #2: %v", err)
+	out2 := drainBeat(t, 2, stream2)
+	if out2.Err != nil {
+		t.Fatalf("RunBeat #2: %v", out2.Err)
 	}
-	printBeat(t, 2, out2)
 
 	tensionAfter2 := findThreadTension(out2.World, "thread-seal")
 	t.Logf("thread-seal tension after beat 2: %.3f", tensionAfter2)
@@ -181,11 +181,25 @@ func TestBeat_DeepSeek_WorldLine_E2E(t *testing.T) {
 	}
 }
 
-func printBeat(t *testing.T, n int, out session.BeatOutput) {
+// drainBeat consumes a streaming BeatOutput end-to-end. The narrative
+// chunks are printed live (so failing E2E runs leave a useful log) and
+// the final BeatResult is returned for assertions. We do not abort on
+// result.Err here — the caller decides whether to t.Fatalf, since some
+// tests want to inspect partial state when failure is meaningful.
+func drainBeat(t *testing.T, n int, out session.BeatOutput) session.BeatResult {
 	t.Helper()
-	fmt.Printf("\n──────── Beat %d Narrative ────────\n%s\n──────── End ────────\n", n, out.Narrative)
-	fmt.Printf("Sequence: %d | Effects: %d | Choices: %d\n",
-		out.World.Clock.Sequence, len(out.ToolEffects), len(out.Choices.Options))
+	fmt.Printf("\n──────── Beat %d Narrative (streaming) ────────\n", n)
+	for chunk := range out.NarrativeStream {
+		fmt.Print(chunk)
+	}
+	fmt.Println()
+	fmt.Println("──────── End ────────")
+	result := <-out.Done
+	if result.Err == nil {
+		fmt.Printf("Sequence: %d | Effects: %d | Choices: %d\n",
+			result.World.Clock.Sequence, len(result.ToolEffects), len(result.Choices.Options))
+	}
+	return result
 }
 
 func findThreadTension(w worldmodel.World, id worldmodel.ThreadID) float64 {

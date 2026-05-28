@@ -20,7 +20,7 @@ import (
 )
 
 // mockChatModel is a no-op ToolCallingChatModel used by tests that only need
-// Narrator to construct (Role / SystemPrompt / Templates / Judge / Tools).
+// Narrator to construct (Role / SystemPrompt / Judge / Tools).
 type mockChatModel struct {
 	tools []*schema.ToolInfo
 }
@@ -263,8 +263,7 @@ func TestNarrator_SuggestActions(t *testing.T) {
 }
 
 func TestNarrator_Templates(t *testing.T) {
-	n, _ := New(&mockChatModel{})
-	templates := n.Templates()
+	templates := AvailableTemplates()
 	if got, want := len(templates), 4; got != want {
 		t.Errorf("len(templates) = %d, want %d", got, want)
 	}
@@ -280,8 +279,9 @@ func TestNarrator_Templates(t *testing.T) {
 }
 
 // TestNarrator_ImplementsGM is a compile-time assertion that *Narrator
-// satisfies role.GM (all four sub-interfaces). If any GM method is missing
-// or has a mismatched signature, this test file will fail to compile.
+// satisfies role.GM (Persona + Rulebook + Director). If any GM method is
+// missing or has a mismatched signature, this test file will fail to
+// compile.
 func TestNarrator_ImplementsGM(t *testing.T) {
 	var _ role.GM = (*Narrator)(nil)
 }

@@ -65,7 +65,7 @@ func TestBeat_DeepSeek_E2E(t *testing.T) {
 	}
 
 	t.Log("=== Running beat ===")
-	output, err := sess.RunBeat(ctx, session.BeatInput{
+	out := sess.RunBeat(ctx, session.BeatInput{
 		WorldID: string(world.ID),
 		Action: role.PlayerAction{
 			PlayerID: player.ID,
@@ -73,22 +73,27 @@ func TestBeat_DeepSeek_E2E(t *testing.T) {
 		},
 		RecentEvents: 5,
 	})
-	if err != nil {
-		t.Fatalf("RunBeat failed: %v", err)
+	// Stream the narrative live to exercise the streaming path against a
+	// real LLM. The full text is also captured in result.Narrative.
+	fmt.Println("──────── Narrative (streaming) ────────")
+	for chunk := range out.NarrativeStream {
+		fmt.Print(chunk)
 	}
-
-	fmt.Println("──────── Narrative ────────")
-	fmt.Println(output.Narrative)
+	fmt.Println()
 	fmt.Println("──────── End Narrative ────────")
-	fmt.Printf("\nSequence: %d | Effects: %d\n", output.World.Clock.Sequence, len(output.ToolEffects))
+	result := <-out.Done
+	if result.Err != nil {
+		t.Fatalf("RunBeat failed: %v", result.Err)
+	}
+	fmt.Printf("\nSequence: %d | Effects: %d\n", result.World.Clock.Sequence, len(result.ToolEffects))
 
-	if len(output.Choices.Options) == 0 {
+	if len(result.Choices.Options) == 0 {
 		t.Fatal("no action suggestions returned")
 	}
 
 	fmt.Println("\n──────── Suggested Actions ────────")
 	hasCustom := false
-	for i, opt := range output.Choices.Options {
+	for i, opt := range result.Choices.Options {
 		if opt.Type == role.ActionTypeCustom {
 			fmt.Printf("  [%d]\n", i+1)
 			hasCustom = true

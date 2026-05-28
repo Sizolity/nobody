@@ -50,8 +50,31 @@ func (m *mockChatModel) Generate(_ context.Context, _ []*schema.Message, _ ...mo
 func (m *mockChatModel) Stream(_ context.Context, _ []*schema.Message, _ ...model.Option) (*schema.StreamReader[*schema.Message], error) {
 	r, w := schema.Pipe[*schema.Message](1)
 	go func() {
-		w.Send(&schema.Message{Role: schema.Assistant, Content: "stream"}, nil)
-		w.Close()
+		defer w.Close()
+		// Mirror Generate's narrative output (no tool calls) so the
+		// ReAct agent finishes after one streaming round.
+		if m.suggestMode {
+			// SuggestActions does not go through Stream — but provide
+			// a defensible fallback in case future code paths route it
+			// here. Emit a single tool-call message identical to the
+			// Generate branch.
+			w.Send(&schema.Message{
+				Role: schema.Assistant,
+				ToolCalls: []schema.ToolCall{{
+					ID:   "call_suggest",
+					Type: "function",
+					Function: schema.FunctionCall{
+						Name:      "suggest_actions",
+						Arguments: `{"options":[{"label":"Look around","type":"explore"},{"label":"Wait quietly","type":"rest"}]}`,
+					},
+				}},
+			}, nil)
+			return
+		}
+		w.Send(&schema.Message{
+			Role:    schema.Assistant,
+			Content: "You step into the darkness. The air is cold and damp.",
+		}, nil)
 	}()
 	return r, nil
 }

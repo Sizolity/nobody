@@ -41,15 +41,9 @@ type Director interface {
 	SuggestActions(ctx context.Context, w model.World, players []Player, narrative string) (ActionChoices, error)
 }
 
-// Registrar provides world templates this GM type supports.
-type Registrar interface {
-	Templates() []WorldTemplate
-}
-
 // GM is the composite interface for a complete game master.
 type GM interface {
 	Persona
 	Rulebook
 	Director
-	Registrar
 }
