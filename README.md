@@ -1,77 +1,87 @@
 # Nobody
 
-Nobody is the shared foundation repository for a **Narrative Harness**.
+Nobody is a product-neutral **fictional world runtime** framework written in
+Go. It provides durable concepts (worlds, entities, events, threads,
+memories, rules) plus the runtime machinery that mutates them — without
+prescribing any particular narrative product.
 
-The old coding-agent product direction has been removed. This repository now keeps the reusable core that future narrative products will depend on:
+Downstream products build their own beat loops, prompts, UIs, and tools on
+top of this framework. The first such product is
+[`github.com/sizolity/worldline`](https://github.com/sizolity/worldline), a
+local-first narrative RPG runtime.
 
-- **Writer Mode product**: structured long-form fiction generation.
-- **Tavern Mode product**: local-first roleplay and adventure worlds.
+## Design Documents
 
-Writer and Tavern should become separate product repositories. This repository should stay product-neutral.
+The conceptual model and architecture live under
+[`docs/product/world-runtime/`](docs/product/world-runtime/) (read in
+numbered order). Engineering notes live under
+[`docs/engineering/`](docs/engineering/).
 
-The core idea is documented in [`docs/product/narrative-harness-core.md`](docs/product/narrative-harness-core.md). The first base design is in [`docs/product/narrative-engine-base-design.md`](docs/product/narrative-engine-base-design.md).
+## Repository Layout
 
-## Current Contents
+```text
+cmd/nobody-world/             framework CLI (init, apply-event, step, run,
+                              checkpoint / rollback / fork / lineage, diff,
+                              merge, validate, ingest-source, …)
+internal/world/
+├── model/                    World, Entity, WorldEvent, MemoryRecord,
+│                             WorldThread, Rule, Relation, Fact, Clock, ...
+├── runtime/                  ApplyEvent, Step, Run, builtin rules
+├── store/                    FileStore (JSON / JSONL) + WorldTemplate
+│                             scaffold (no concrete templates ship here)
+├── view/                     NarrativeView, WorldDebugView,
+│                             CharacterContextView projections
+├── ingest/                   Draft → World compile pipeline + Parser /
+│                             ChunkParser interfaces
+├── director/                 Event proposal interface + script / random /
+│                             reconcile / event-table / LLM directors
+├── runner/                   Multi-step runner over (Runtime, Directors)
+├── system/                   Optional actor / spatial / inventory / stats
+│                             helpers (currently unused — kept as scaffolding)
+└── devcli/                   The nobody-world CLI implementation
+internal/{config,inference,embedding,textchunk,tools,trace,utils}
+                              Shared infrastructure used by devcli /
+                              directors (LLM director config, run metadata,
+                              text chunking, etc.).
+```
 
-This repository intentionally keeps only a small set of reusable building blocks:
+## Design Boundaries (enforced by code reviews and the docs)
 
-- `internal/inference/llamacpp`: local llama.cpp runtime, health checks, OpenAI-compatible chat and embedding clients, and managed process helpers.
-- `internal/inference`: shared inference events and health-check contracts.
-- `internal/config`: shared model/runtime configuration for the reusable core.
-- `internal/workspace`: small logging and run metadata primitives worth reusing in future narrative products.
-- `internal/narrative`: product-neutral world/story schemas, file-backed narrative storage, and a deterministic beat loop.
-- `pkg/narrative`, `pkg/config`, `pkg/inference`, `pkg/workspace`, and `pkg/skills`: public facade packages for future Writer and Tavern repositories.
-- `internal/skills`: minimal embedding interface for future recall/index work.
-- `scripts`: llama.cpp build/start helper scripts.
-- `docs/product`: new product direction and core engine notes.
+The framework deliberately stays product-neutral:
 
-Everything else should be rebuilt deliberately around the Narrative Harness base. Product-specific workflows, prompts, UI, and packaging belong in the future Writer and Tavern repositories.
+- `internal/world/model` exposes `Entity.Type string` — values like
+  `character` / `location` / `item` are **product conventions**, not enums
+  baked into the framework.
+- `internal/world/store` ships the `WorldTemplate` struct but **no concrete
+  templates**. Products supply their own templates (e.g. Worldline's
+  `rpg/template/{fantasy,scifi,modern,mystery}.go`).
+- The framework never imports a downstream product. Any `internal/world/*`
+  package importing a product (e.g. `rpg/`) is a layering violation. The
+  prior `manage-rule` / `--template` couplings were removed when the RPG
+  product was split into the Worldline repository.
 
-## Public Import Surface
+## Quick Start
 
-Future product repositories should import the shared narrative core through:
+```fish
+go build -o ./bin/nobody-world ./cmd/nobody-world
 
-- `github.com/sizolity/nobody/pkg/narrative`
-- `github.com/sizolity/nobody/pkg/narrative/agentio`
-- `github.com/sizolity/nobody/pkg/narrative/bootstrap`
-- `github.com/sizolity/nobody/pkg/narrative/contract`
-- `github.com/sizolity/nobody/pkg/narrative/store`
-- `github.com/sizolity/nobody/pkg/narrative/engine`
-- `github.com/sizolity/nobody/pkg/narrative/enginetest`
-- `github.com/sizolity/nobody/pkg/narrative/id`
-- `github.com/sizolity/nobody/pkg/narrative/memstore`
-- `github.com/sizolity/nobody/pkg/narrative/prompt`
-- `github.com/sizolity/nobody/pkg/narrative/snapshot`
-- `github.com/sizolity/nobody/pkg/narrative/storetest`
-- `github.com/sizolity/nobody/pkg/config`
-- `github.com/sizolity/nobody/pkg/inference`
-- `github.com/sizolity/nobody/pkg/inference/llamacpp`
-- `github.com/sizolity/nobody/pkg/workspace`
-- `github.com/sizolity/nobody/pkg/skills`
-
-Packages under `internal/` are implementation detail and should not be treated as the downstream product API.
-
-`pkg/narrative/enginetest` is intended for product tests only. It provides deterministic agent doubles so Writer and Tavern can test product workflows without calling an LLM.
-
-`pkg/narrative/storetest` is intended for custom Store implementation tests, such as future database-backed stores.
-
-`pkg/narrative/agentio` decodes model JSON output into typed contracts and includes validate-on-decode helpers for beat plans, drafts, memory deltas, and state deltas.
+./bin/nobody-world init --workspace /tmp/nb --world-id demo --name "Demo World"
+./bin/nobody-world show --workspace /tmp/nb --world-id demo
+```
 
 ## Verification
 
-```bash
+```fish
 go test ./...
+go vet  ./...
+go build ./...
 ```
 
-## Narrative Base Slice
+## Downstream Products
 
-The current shared base includes:
-
-- world bible schema
-- story graph schema
-- event and memory JSONL store
-- draft store
-- product-neutral beat loop
-- five-agent narrative map: director, writer, continuity, memory, state
-
-Writer Mode and Tavern Mode should be designed as downstream products on top of this base, not as long-term modes inside this repository.
+- [Worldline](https://github.com/sizolity/worldline) — local-first narrative
+  RPG: streaming beats, Lorekeeper knowledge sedimentation, WorldLine
+  drift / milestone scheduler, REPL CLI. Currently a fork-and-copy of the
+  `internal/world/{model,director,runtime,store,view,ingest}` subset rather
+  than a Go import dependency; see Worldline's `README.md` for the
+  provenance pointer.

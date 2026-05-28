@@ -39,59 +39,11 @@ func TestRunInitCreatesWorldSnapshot(t *testing.T) {
 	}
 }
 
-func TestRunInitWithTemplate(t *testing.T) {
-	t.Parallel()
-	workspace := t.TempDir()
-	var stdout, stderr bytes.Buffer
-	code := Run(context.Background(), []string{
-		"init",
-		"--workspace", workspace,
-		"--world-id", "my_fantasy",
-		"--name", "My Fantasy World",
-		"--template", "fantasy",
-	}, &stdout, &stderr)
-	if code != 0 {
-		t.Fatalf("exit = %d, stderr=%s", code, stderr.String())
-	}
-	if !strings.Contains(stdout.String(), "template") {
-		t.Errorf("expected 'template' in output, got: %s", stdout.String())
-	}
-
-	world, err := store.NewFileStore(workspace).LoadSnapshot(context.Background(), "my_fantasy")
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	if world.Name != "My Fantasy World" {
-		t.Errorf("Name = %q", world.Name)
-	}
-	if len(world.Entities) != 4 {
-		t.Errorf("entities = %d, want 4", len(world.Entities))
-	}
-	if world.Canon.Premise == "" {
-		t.Error("missing premise")
-	}
-	if len(world.Threads) != 1 {
-		t.Errorf("threads = %d, want 1", len(world.Threads))
-	}
-}
-
-func TestRunInitUnknownTemplate(t *testing.T) {
-	t.Parallel()
-	var stdout, stderr bytes.Buffer
-	code := Run(context.Background(), []string{
-		"init",
-		"--workspace", t.TempDir(),
-		"--world-id", "w1",
-		"--name", "W",
-		"--template", "nonexistent",
-	}, &stdout, &stderr)
-	if code != 2 {
-		t.Fatalf("expected exit 2, got %d", code)
-	}
-	if !strings.Contains(stderr.String(), "unknown template") {
-		t.Errorf("expected 'unknown template' in stderr, got: %s", stderr.String())
-	}
-}
+// NOTE: world-template support (TestRunInitWithTemplate / TestRunInitUnknownTemplate)
+// was moved out of this framework CLI when the RPG product was split into the
+// Worldline repository. Product-specific world templates now live next to their
+// products (e.g. github.com/sizolity/worldline/rpg/template/). devcli's `init`
+// stays template-free on purpose.
 
 func TestRunApplyEventPersistsEvent(t *testing.T) {
 	t.Parallel()
