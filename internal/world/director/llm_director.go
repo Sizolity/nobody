@@ -6,9 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/cloudwego/eino/components/prompt"
-	"github.com/cloudwego/eino/schema"
-
+	"github.com/sizolity/nobody/internal/world/llm"
 	"github.com/sizolity/nobody/internal/world/model"
 )
 
@@ -63,82 +61,6 @@ Return ONLY a valid JSON array. No markdown, no explanation.`
 
 const DefaultMaxRepairAttempts = 2
 
-// PromptTemplate wraps an Eino ChatTemplate that renders a system prompt
-// using live world state. Variables are injected from PromptTemplateData.
-type PromptTemplate struct {
-	ct prompt.ChatTemplate
-}
-
-// PromptTemplateData is the data available inside a system prompt template.
-// Field names match worldPromptContext for consistency.
-type PromptTemplateData struct {
-	WorldID     string
-	Name        string
-	Description string
-	Clock       int64
-	Entities    []entitySummary
-	Facts       []factSummary
-	Relations   []relationSummary
-	Memories    []memorySummary
-	Threads     []threadSummary
-}
-
-// ParsePromptTemplate parses a template string using Go text/template syntax
-// ({{.Var}}). Use ParsePromptTemplateWithFormat for other syntaxes.
-func ParsePromptTemplate(text string) (*PromptTemplate, error) {
-	return ParsePromptTemplateWithFormat(text, schema.GoTemplate)
-}
-
-// ParsePromptTemplateWithFormat parses a template string with the specified
-// format type. Supported: schema.GoTemplate ({{.Var}}), schema.FString ({Var}),
-// schema.Jinja2 ({{Var}}).
-func ParsePromptTemplateWithFormat(text string, ft schema.FormatType) (*PromptTemplate, error) {
-	ct := prompt.FromMessages(ft, schema.SystemMessage(text))
-	// Dry-run with zero values to catch syntax errors early.
-	if _, err := ct.Format(context.Background(), templateDataToVars(PromptTemplateData{})); err != nil {
-		return nil, fmt.Errorf("parse prompt template: %w", err)
-	}
-	return &PromptTemplate{ct: ct}, nil
-}
-
-// Render executes the template against the world state and returns the
-// resulting system prompt string.
-func (pt *PromptTemplate) Render(w model.World) (string, error) {
-	data := PromptTemplateData{
-		WorldID:     string(w.ID),
-		Name:        w.Name,
-		Description: w.Description,
-		Clock:       w.Clock.Sequence,
-		Entities:    entitySummaries(w.Entities),
-		Facts:       factSummaries(w.Facts),
-		Relations:   relationSummaries(w.Relations),
-		Memories:    memorySummaries(w.Memory),
-		Threads:     threadSummaries(w.Threads),
-	}
-	msgs, err := pt.ct.Format(context.Background(), templateDataToVars(data))
-	if err != nil {
-		return "", fmt.Errorf("render prompt template: %w", err)
-	}
-	if len(msgs) == 0 {
-		return "", nil
-	}
-	return msgs[0].Content, nil
-}
-
-func templateDataToVars(d PromptTemplateData) map[string]any {
-	return map[string]any{
-		"WorldID":     d.WorldID,
-		"Name":        d.Name,
-		"Description": d.Description,
-		"Clock":       d.Clock,
-		"Entities":    d.Entities,
-		"Facts":       d.Facts,
-		"Relations":   d.Relations,
-		"Memories":    d.Memories,
-		"Threads":     d.Threads,
-	}
-}
-
 type LLMDirectorConfig struct {
 	// SystemPrompt is a static system prompt string. Ignored when
 	// PromptTemplate is set.
@@ -146,7 +68,7 @@ type LLMDirectorConfig struct {
 
 	// PromptTemplate is a dynamic system prompt rendered per Propose call
 	// with live world state. Takes priority over SystemPrompt.
-	PromptTemplate *PromptTemplate
+	PromptTemplate *llm.PromptTemplate
 
 	Generator TextGenerator
 
@@ -242,11 +164,11 @@ func buildWorldPrompt(w model.World) string {
 		Name:        w.Name,
 		Description: w.Description,
 		Clock:       w.Clock.Sequence,
-		Entities:    entitySummaries(w.Entities),
-		Facts:       factSummaries(w.Facts),
-		Relations:   relationSummaries(w.Relations),
-		Memories:    memorySummaries(w.Memory),
-		Threads:     threadSummaries(w.Threads),
+		Entities:    llm.EntitySummaries(w.Entities),
+		Facts:       llm.FactSummaries(w.Facts),
+		Relations:   llm.RelationSummaries(w.Relations),
+		Memories:    llm.MemorySummaries(w.Memory),
+		Threads:     llm.ThreadSummaries(w.Threads),
 	})
 	if err != nil {
 		return fmt.Sprintf(`{"world_id":%q,"name":%q}`, w.ID, w.Name)
@@ -255,122 +177,15 @@ func buildWorldPrompt(w model.World) string {
 }
 
 type worldPromptContext struct {
-	WorldID     string            `json:"world_id"`
-	Name        string            `json:"name"`
-	Description string            `json:"description,omitempty"`
-	Clock       int64             `json:"clock"`
-	Entities    []entitySummary   `json:"entities,omitempty"`
-	Facts       []factSummary     `json:"facts,omitempty"`
-	Relations   []relationSummary `json:"relations,omitempty"`
-	Memories    []memorySummary   `json:"memories,omitempty"`
-	Threads     []threadSummary   `json:"threads,omitempty"`
-}
-
-type entitySummary struct {
-	ID          string         `json:"id"`
-	Type        string         `json:"type"`
-	Name        string         `json:"name"`
-	Description string         `json:"description,omitempty"`
-	State       map[string]any `json:"state,omitempty"`
-}
-
-type factSummary struct {
-	ID        string `json:"id"`
-	SubjectID string `json:"subject_id"`
-	Predicate string `json:"predicate"`
-	Value     any    `json:"value"`
-}
-
-type relationSummary struct {
-	ID       string `json:"id"`
-	Type     string `json:"type"`
-	SourceID string `json:"source_id"`
-	TargetID string `json:"target_id"`
-}
-
-type memorySummary struct {
-	ID          string `json:"id"`
-	OwnerID     string `json:"owner_id,omitempty"`
-	Content     string `json:"content"`
-	TruthStatus string `json:"truth_status"`
-}
-
-type threadSummary struct {
-	ID     string `json:"id"`
-	Title  string `json:"title"`
-	Status string `json:"status"`
-}
-
-func entitySummaries(entities map[model.EntityID]model.Entity) []entitySummary {
-	out := make([]entitySummary, 0, len(entities))
-	for _, e := range entities {
-		var state map[string]any
-		if len(e.State) > 0 {
-			state = make(map[string]any, len(e.State))
-			for k, v := range e.State {
-				state[k] = v.Raw
-			}
-		}
-		out = append(out, entitySummary{
-			ID:          string(e.ID),
-			Type:        e.Type,
-			Name:        e.Name,
-			Description: e.Description,
-			State:       state,
-		})
-	}
-	return out
-}
-
-func factSummaries(facts []model.Fact) []factSummary {
-	out := make([]factSummary, 0, len(facts))
-	for _, f := range facts {
-		out = append(out, factSummary{
-			ID:        string(f.ID),
-			SubjectID: string(f.SubjectID),
-			Predicate: f.Predicate,
-			Value:     f.Value.Raw,
-		})
-	}
-	return out
-}
-
-func relationSummaries(relations []model.Relation) []relationSummary {
-	out := make([]relationSummary, 0, len(relations))
-	for _, r := range relations {
-		out = append(out, relationSummary{
-			ID:       string(r.ID),
-			Type:     r.Type,
-			SourceID: string(r.SourceID),
-			TargetID: string(r.TargetID),
-		})
-	}
-	return out
-}
-
-func memorySummaries(memories []model.MemoryRecord) []memorySummary {
-	out := make([]memorySummary, 0, len(memories))
-	for _, m := range memories {
-		out = append(out, memorySummary{
-			ID:          string(m.ID),
-			OwnerID:     m.Owner.ID,
-			Content:     m.Content,
-			TruthStatus: m.TruthStatus,
-		})
-	}
-	return out
-}
-
-func threadSummaries(threads []model.WorldThread) []threadSummary {
-	out := make([]threadSummary, 0, len(threads))
-	for _, th := range threads {
-		out = append(out, threadSummary{
-			ID:     string(th.ID),
-			Title:  th.Title,
-			Status: th.Status,
-		})
-	}
-	return out
+	WorldID     string               `json:"world_id"`
+	Name        string               `json:"name"`
+	Description string               `json:"description,omitempty"`
+	Clock       int64                `json:"clock"`
+	Entities    []llm.EntitySummary  `json:"entities,omitempty"`
+	Facts       []llm.FactSummary    `json:"facts,omitempty"`
+	Relations   []llm.RelationSummary `json:"relations,omitempty"`
+	Memories    []llm.MemorySummary  `json:"memories,omitempty"`
+	Threads     []llm.ThreadSummary  `json:"threads,omitempty"`
 }
 
 func parseEventResponse(response string) ([]model.WorldEvent, error) {
@@ -394,13 +209,11 @@ func stripMarkdownFences(s string) string {
 	if !strings.HasPrefix(trimmed, "```") {
 		return trimmed
 	}
-	// Remove opening fence line
 	idx := strings.Index(trimmed, "\n")
 	if idx < 0 {
 		return trimmed
 	}
 	inner := trimmed[idx+1:]
-	// Remove closing fence
 	if last := strings.LastIndex(inner, "```"); last >= 0 {
 		inner = inner[:last]
 	}

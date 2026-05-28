@@ -6,35 +6,45 @@ This document describes how the world runtime behaves.
 
 It focuses on mechanisms and execution logic rather than data field definitions. The concrete model fields live in [`03-core-model-design.md`](03-core-model-design.md).
 
+## Capability Tiers
+
+This document describes the full conceptual design. Current implementation status:
+
+- Items marked **[T1]** are implemented in the current codebase.
+- Items marked **[T2]** are identified as next development targets.
+- Items unmarked or marked **[T3]** are aspirational — described for completeness but not yet needed by any product anchor.
+
+See `docs/engineering/world-runtime/implementation-status.md` for detailed implementation status.
+
 ## Event Mechanism
 
-Events are the only state change entry point.
+**[T1]** Events are the only state change entry point.
 
-Recommended event pipeline:
+**[T1]** Recommended event pipeline:
 
 ```text
-Propose Event
-  -> Validate Preconditions
-  -> Resolve Rules
-  -> Apply Effects
-  -> Extract Memories
-  -> Update Threads
-  -> Generate Views
+[T1] Propose Event
+  -> [T1] Validate Preconditions
+  -> [T1] Resolve Rules
+  -> [T1] Apply Effects
+  -> [T2] Extract Memories
+  -> [T2] Update Threads
+  -> [T1] Generate Views
 ```
 
 This enables replay, branching, debugging, tests, and causal explanation.
 
-The runtime should not let products, agents, scripts, or random systems mutate world state directly. They should propose events. The runtime validates and applies them.
+**[T1]** The runtime should not let products, agents, scripts, or random systems mutate world state directly. They should propose events. The runtime validates and applies them.
 
 This is what keeps `nobody` closer to a story system than a plain database state machine: events carry intent, visibility, causes, effects, and memory changes, so the system can explain why the world changed and how different characters understood it.
 
 ## Memory Mechanism
 
-Memory should represent both objective world knowledge and subjective belief.
+**[T1]** Memory should represent both objective world knowledge and subjective belief.
 
 This allows the engine to represent misunderstanding, lies, hidden truths, rumors, outdated knowledge, and investigation. Memory is therefore not only persistence; it is one of the engines that creates new story pressure.
 
-The runtime should never treat memory as one shared omniscient context for all characters. Retrieval must be owner-aware: a character context can include that character's private memories, public knowledge, and visible facts, but not hidden world or narrator truth unless an event has revealed it.
+**[T2]** The runtime should never treat memory as one shared omniscient context for all characters. Retrieval must be owner-aware: a character context can include that character's private memories, public knowledge, and visible facts, but not hidden world or narrator truth unless an event has revealed it.
 
 Example:
 
@@ -59,7 +69,7 @@ World truth should not automatically overwrite character memory. Characters upda
 
 `WorldMemory` can be used as the fact anchor for truth reconciliation, but the reconciliation process must decide whether a character actually updates. The result may be direct correction, reduced confidence, suspicion, denial, or an emotional shift.
 
-Recommended memory pipeline:
+**[T2]** Recommended memory pipeline:
 
 ```text
 EventLog
@@ -69,7 +79,7 @@ EventLog
   -> Context Builder
 ```
 
-Future `ReconcileMemory` logic should check:
+**[T2]** Future `ReconcileMemory` logic should check:
 
 - whether new events contradict old memories;
 - whether the owner has enough evidence to update belief;
@@ -79,7 +89,7 @@ Future `ReconcileMemory` logic should check:
 
 ## Rule Mechanism
 
-Rules validate, modify, reject, or expand proposed events.
+**[T1]** Rules validate, modify, reject, or expand proposed events.
 
 Rules must be able to inspect both world facts and subjective memories:
 
@@ -93,22 +103,22 @@ This allows characters to act on belief, not only objective truth.
 Rule actions can include:
 
 ```text
-allow_event
-reject_event
-modify_event
-add_effect
-require_check
-enqueue_event
-raise_conflict
+[T1] allow_event
+[T1] reject_event
+[T2] modify_event
+[T2] add_effect
+[T2] require_check
+[T2] enqueue_event
+[T2] raise_conflict
 ```
 
-The first implementation should prefer Go interfaces over a full rules DSL. A serializable DSL can come later after repeated rule shapes are clear.
+**[T1]** The first implementation should prefer Go interfaces over a full rules DSL. A serializable DSL can come later after repeated rule shapes are clear.
 
 Some rules can later be serialized as YAML or JSON, such as setting constraints, location restrictions, and random event tables. The core evaluator should still be a typed rule engine until the common rule shapes are proven.
 
 ## Thread Mechanism
 
-Threads connect isolated events into durable world momentum.
+**[T1]** Threads connect isolated events into durable world momentum.
 
 ```text
 Event happens
@@ -117,9 +127,9 @@ Event happens
   -> Director uses active threads to propose future events
 ```
 
-Threads should be long-running pressures, not fixed plots. They can pause, branch, resolve, fail, or be interrupted.
+**[T1]** Threads should be long-running pressures, not fixed plots. They can pause, branch, resolve, fail, or be interrupted.
 
-Typical thread mechanisms:
+**[T2]** Typical thread mechanisms:
 
 - increase `Tension` after unresolved conflict;
 - lower `Priority` when a thread becomes dormant;
@@ -130,7 +140,7 @@ Typical thread mechanisms:
 
 ## Director Mechanism
 
-`Director` is a pluggable event proposal source. It should not directly mutate the world.
+**[T1]** `Director` is a pluggable event proposal source. It should not directly mutate the world.
 
 Recommended interface:
 
@@ -144,12 +154,12 @@ type Director interface {
 Director types:
 
 ```text
-CharacterDirector   proposes character actions from goals, memory, emotion, and state
-RandomDirector      proposes random incidents from time, place, and probability tables
-ScriptDirector      proposes authored events from triggers and branches
-NarrativeDirector   manages pacing, reveals, tension, and scene variety
-ExternalDirector    turns user or API input into event proposals
-SystemDirector      proposes maintenance events such as memory compression
+[T2] CharacterDirector   proposes character actions from goals, memory, emotion, and state
+[T1] RandomDirector      proposes random incidents from time, place, and probability tables
+[T1] ScriptDirector      proposes authored events from triggers and branches
+[T2] NarrativeDirector   manages pacing, reveals, tension, and scene variety
+[T2] ExternalDirector    turns user or API input into event proposals
+[T2] SystemDirector      proposes maintenance events such as memory compression
 ```
 
 Director examples:
@@ -184,21 +194,21 @@ The arbitration layer could be called `EventScheduler`, `WorldRuntime`, or `Simu
 
 ## Runtime Logic
 
-Runtime owns the step loop. It is responsible for converting event proposals into applied world changes.
+**[T1]** Runtime owns the step loop. It is responsible for converting event proposals into applied world changes.
 
 Conceptual flow:
 
 ```text
-Input / Director Proposal
-  -> Candidate Events
-  -> Rule Validation
-  -> Conflict Resolution
-  -> Event Scheduling
-  -> Effect Application
-  -> Memory Extraction
-  -> Thread Update
-  -> View Rendering
-  -> Persisted World State And Logs
+[T1] Input / Director Proposal
+  -> [T1] Candidate Events
+  -> [T1] Rule Validation
+  -> [T2] Conflict Resolution
+  -> [T2] Event Scheduling
+  -> [T1] Effect Application
+  -> [T2] Memory Extraction
+  -> [T2] Thread Update
+  -> [T1] View Rendering
+  -> [T1] Persisted World State And Logs
 ```
 
 Conceptual runtime:
@@ -231,24 +241,24 @@ Minimal early runtime:
 6. Render debug, narrative, or character context views.
 ```
 
-Character self-drive and random directors can be added after the event and memory mechanisms are stable.
+**[T2]** Character self-drive and random directors can be added after the event and memory mechanisms are stable.
 
 ## View Mechanism
 
-`View` projects world state into a form usable by humans, products, or LLM agents. It should not be the source of truth.
+**[T1]** `View` projects world state into a form usable by humans, products, or LLM agents. It should not be the source of truth.
 
 The same world can have many views. A view should not pollute the lower-level state model; it should read world state, apply perspective and visibility rules, and produce an output for a specific audience.
 
 Examples:
 
 ```text
-NovelView          rendered prose or scene continuation
-RPGView            visible game scene and possible interactions
-GMView             hidden state for author, host, or debugger
-CharacterView      subjective context for one character
-DebugView          full world state and event replay
-TimelineView       chronological history
-WorldBibleView     setting and entity reference
+[T1] NovelView          rendered prose or scene continuation
+[T2] RPGView            visible game scene and possible interactions
+[T2] GMView             hidden state for author, host, or debugger
+[T1] CharacterView      subjective context for one character
+[T1] DebugView          full world state and event replay
+[T2] TimelineView       chronological history
+[T2] WorldBibleView     setting and entity reference
 ```
 
 Recommended interface:
@@ -333,16 +343,16 @@ They should not read unrestricted World state unless they are acting as a narrat
 
 This prevents a character agent from seeing hidden narrator truth or memories the character should not know. For example, character B should receive `CharacterView(B)`, not `GMView`, if B has not learned the narrator's hidden secret.
 
-Minimal early views:
+**[T1]** Minimal early views:
 
 ```text
-WorldDebugView
+[T1] WorldDebugView
   complete state for developers and tests
 
-NarrativeView
+[T1] NarrativeView
   event history and active threads rendered as narrative text or summary
 
-CharacterContextView
+[T1] CharacterContextView
   visible state, subjective memory, goals, and constraints for one character
 ```
 
@@ -356,22 +366,22 @@ character self-drive
 
 ## LLM Integration Boundary
 
-LLMs should be used as proposal, interpretation, summarization, and rendering helpers. They should not be the source of truth.
+**[T1]** LLMs should be used as proposal, interpretation, summarization, and rendering helpers. They should not be the source of truth.
 
 Appropriate LLM roles:
 
-- convert user text into event proposals;
-- infer character intent from visible context;
-- summarize events into memory records;
-- generate narrative text from a view;
-- suggest possible director actions;
-- detect contradictions for human or rule review.
+- **[T1]** convert user text into event proposals;
+- **[T2]** infer character intent from visible context;
+- **[T2]** summarize events into memory records;
+- **[T1]** generate narrative text from a view;
+- **[T2]** suggest possible director actions;
+- **[T2]** detect contradictions for human or rule review.
 
-Required boundary:
+**[T1]** Required boundary:
 
 ```text
 LLM output -> typed contract -> validation -> event/effect application
 ```
 
-The system should not let unvalidated model prose directly mutate world state.
+**[T1]** The system should not let unvalidated model prose directly mutate world state.
 

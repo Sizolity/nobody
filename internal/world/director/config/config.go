@@ -9,10 +9,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/cloudwego/eino/schema"
 	"gopkg.in/yaml.v3"
 
 	"github.com/sizolity/nobody/internal/world/director"
+	"github.com/sizolity/nobody/internal/world/llm"
 	"github.com/sizolity/nobody/internal/world/model"
 )
 
@@ -146,14 +146,10 @@ func buildDirector(cfg DirectorConfig, opt LoadOptions) (director.Director, erro
 		if err != nil {
 			return nil, fmt.Errorf("generator factory: %w", err)
 		}
-		var promptTpl *director.PromptTemplate
+		var promptTpl *llm.PromptTemplate
 		if cfg.SystemPromptTemplate != "" {
-			ft, ftErr := resolveTemplateFormat(cfg.TemplateFormat)
-			if ftErr != nil {
-				return nil, ftErr
-			}
 			var parseErr error
-			promptTpl, parseErr = director.ParsePromptTemplateWithFormat(cfg.SystemPromptTemplate, ft)
+			promptTpl, parseErr = llm.ParsePromptTemplateFormatName(cfg.SystemPromptTemplate, cfg.TemplateFormat)
 			if parseErr != nil {
 				return nil, fmt.Errorf("system_prompt_template: %w", parseErr)
 			}
@@ -166,19 +162,6 @@ func buildDirector(cfg DirectorConfig, opt LoadOptions) (director.Director, erro
 		}), nil
 	default:
 		return nil, fmt.Errorf("unsupported director kind %q", cfg.Kind)
-	}
-}
-
-func resolveTemplateFormat(s string) (schema.FormatType, error) {
-	switch s {
-	case "", "go_template":
-		return schema.GoTemplate, nil
-	case "fstring":
-		return schema.FString, nil
-	case "jinja2":
-		return schema.Jinja2, nil
-	default:
-		return 0, fmt.Errorf("unsupported template_format %q (use go_template, fstring, or jinja2)", s)
 	}
 }
 

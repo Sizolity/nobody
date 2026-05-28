@@ -37,6 +37,12 @@ func WithDirectors(directors ...director.Director) RuntimeOption {
 	}
 }
 
+func WithWorldRules(registry *RuleRegistry) RuntimeOption {
+	return func(rt *Runtime) {
+		rt.worldRuleRegistry = registry
+	}
+}
+
 func WithEventQueueLimit(limit int) RuntimeOption {
 	return func(rt *Runtime) {
 		rt.EventQueueLimit = limit

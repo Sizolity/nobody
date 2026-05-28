@@ -36,13 +36,13 @@ internal/world/
 ├── director/                 Event proposal interface + script / random /
 │                             reconcile / event-table / LLM directors
 ├── runner/                   Multi-step runner over (Runtime, Directors)
-├── system/                   Optional actor / spatial / inventory / stats
-│                             helpers (currently unused — kept as scaffolding)
+├── system/                   Event-builder helpers: typed functions that
+│                             construct valid WorldEvent values for spatial,
+│                             inventory, stats, and actor mutations.
+│                             Called by products, not by runtime automatically.
 └── devcli/                   The nobody-world CLI implementation
-internal/{config,inference,embedding,textchunk,tools,trace,utils}
-                              Shared infrastructure used by devcli /
-                              directors (LLM director config, run metadata,
-                              text chunking, etc.).
+internal/textchunk/           Text chunking utilities (currently unused,
+                              reserved for ingest pipeline)
 ```
 
 ## Design Boundaries (enforced by code reviews and the docs)

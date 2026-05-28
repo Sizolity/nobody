@@ -11,9 +11,10 @@ import (
 )
 
 type Runtime struct {
-	Rules           []Rule
-	Directors       []director.Director
-	EventQueueLimit int
+	Rules             []Rule
+	Directors         []director.Director
+	EventQueueLimit   int
+	worldRuleRegistry *RuleRegistry
 }
 
 type StepResult struct {
@@ -318,6 +319,29 @@ func advanceClock(clock model.WorldClock) model.WorldClock {
 
 func (r Runtime) evaluateRules(world model.World, event model.WorldEvent) error {
 	ctx := RuleContext{World: world}
+
+	var worldRules []Rule
+	if r.worldRuleRegistry != nil {
+		var err error
+		worldRules, err = r.worldRuleRegistry.BuildAll(world.Rules)
+		if err != nil {
+			return fmt.Errorf("world rules: %w", err)
+		}
+	}
+
+	for _, rule := range worldRules {
+		decision := rule.Evaluate(ctx, event)
+		if err := decision.Validate(); err != nil {
+			return fmt.Errorf("rule %q: %w", rule.ID(), err)
+		}
+		if decision.Status == RuleDecisionReject {
+			if decision.Reason == "" {
+				return fmt.Errorf("rule %q rejected event", rule.ID())
+			}
+			return fmt.Errorf("rule %q rejected event: %s", rule.ID(), decision.Reason)
+		}
+	}
+
 	for _, rule := range r.Rules {
 		decision := rule.Evaluate(ctx, event)
 		if err := decision.Validate(); err != nil {

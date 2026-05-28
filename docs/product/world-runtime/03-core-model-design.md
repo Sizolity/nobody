@@ -6,9 +6,19 @@ This document contains the concrete conceptual data model for the world runtime.
 
 It covers `World`, supporting primitives, `Canon`, `WorldClock`, `Relation`, `Fact`, `Entity`, `MemoryRecord`, `WorldEvent`, `Rule`, and `WorldThread`. Mechanism-level runtime behavior is described separately in [`04-runtime-mechanisms.md`](04-runtime-mechanisms.md).
 
+## Capability Tiers
+
+This document describes the full conceptual design. Current implementation status:
+
+- Items marked **[T1]** are implemented in the current codebase.
+- Items marked **[T2]** are identified as next development targets.
+- Items unmarked or marked **[T3]** are aspirational — described for completeness but not yet needed by any product anchor.
+
+See `docs/engineering/world-runtime/implementation-status.md` for detailed implementation status.
+
 ## World Model
 
-`World` is the top-level state container.
+**[T1]** `World` is the top-level state container.
 
 At the conceptual level, a world has these major parts:
 
@@ -29,17 +39,17 @@ World
 
 Conceptual roles:
 
-- `Identity`: world metadata, name, type, era, style, and basic physical, magical, or social setting assumptions.
-- `Timeline`: current time, historical milestones, planned future pressure, and possible branches.
-- `Entities`: all referenceable objects, including characters, items, locations, organizations, factions, concepts, quests, and secrets.
-- `Relations`: relationships between entities, such as ownership, hostility, kinship, containment, causality, or knowledge of a secret.
-- `State`: current world snapshot, including character state, location state, resource state, conflict state, and quest state.
-- `Rules`: how the world runs, including combat, economy, magic, society, narrative constraints, and consistency checks.
-- `Events`: happened, happening, or possible events. Random incidents, external input, accidents, and LLM proposals should all become events before changing state.
-- `Memory`: long-term memory and summaries that support continuation, character consistency, and world continuity.
-- `Scripts`: authored plot scripts, quest chains, trigger conditions, and branch flows.
-- `Directors`: engines that drive world evolution, such as random incident engines, narrative directors, character self-drive, and external input interpreters.
-- `Views`: projections for upper layers, such as novel text, RPG scene descriptions, battle reports, character sheets, or GM hints.
+- **[T1]** `Identity`: world metadata, name, type, era, style, and basic physical, magical, or social setting assumptions.
+- **[T1]** `Timeline`: current time, historical milestones, planned future pressure, and possible branches.
+- **[T1]** `Entities`: all referenceable objects, including characters, items, locations, organizations, factions, concepts, quests, and secrets.
+- **[T1]** `Relations`: relationships between entities, such as ownership, hostility, kinship, containment, causality, or knowledge of a secret.
+- **[T1]** `State`: current world snapshot, including character state, location state, resource state, conflict state, and quest state.
+- **[T1]** `Rules`: how the world runs, including combat, economy, magic, society, narrative constraints, and consistency checks.
+- **[T1]** `Events`: happened, happening, or possible events. Random incidents, external input, accidents, and LLM proposals should all become events before changing state.
+- **[T1]** `Memory`: long-term memory and summaries that support continuation, character consistency, and world continuity.
+- **[T3]** `Scripts`: authored plot scripts, quest chains, trigger conditions, and branch flows.
+- **[T1]** `Directors`: engines that drive world evolution, such as random incident engines, narrative directors, character self-drive, and external input interpreters.
+- **[T1]** `Views`: projections for upper layers, such as novel text, RPG scene descriptions, battle reports, character sheets, or GM hints.
 
 The more precise relationship is:
 
@@ -55,7 +65,7 @@ Memory compresses and preserves continuity.
 Views render World as novels, RPG scenes, simulation reports, and other outputs.
 ```
 
-`Story` should not be a bottom-level field. It is better modeled as a `View` or as the result of `Scripts` and `Events`:
+**[T1]** `Story` should not be a bottom-level field. It is better modeled as a `View` or as the result of `Scripts` and `Events`:
 
 ```text
 World -> Events -> State Changes -> Narrative View -> Story Text
@@ -103,19 +113,19 @@ type World struct {
 
 Field roles:
 
-- `Canon`: durable setting constraints, tone, genre, physical or magical assumptions, social rules, boundaries, and author intent.
-- `Clock`: world time, which may be ticks, turns, scenes, chapters, days, or in-universe timestamps.
-- `Entities`: all addressable objects, including characters, items, locations, organizations, secrets, concepts, and quests.
-- `Relations`: graph edges between entities, such as owns, knows, hates, contains, located-at, caused-by, or allied-with.
-- `Facts`: currently true or claimed world facts.
-- `Rules`: logic that validates, modifies, rejects, or expands proposed events.
-- `Threads`: active story, conflict, quest, mystery, relationship, or world-event lines.
-- `EventLog`: append-only history of applied world changes.
-- `EventQueue`: proposed or scheduled events not yet applied.
-- `Memory`: durable objective and subjective memory records.
-- `Drivers`: systems that can propose future events.
-- `Views`: projections of world state for narrative, RPG, debugging, or agent contexts.
-- `Metadata`: schema version, source, timestamps, and migration data.
+- **[T1]** `Canon`: durable setting constraints, tone, genre, physical or magical assumptions, social rules, boundaries, and author intent.
+- **[T1]** `Clock`: world time, which may be ticks, turns, scenes, chapters, days, or in-universe timestamps.
+- **[T1]** `Entities`: all addressable objects, including characters, items, locations, organizations, secrets, concepts, and quests.
+- **[T1]** `Relations`: graph edges between entities, such as owns, knows, hates, contains, located-at, caused-by, or allied-with.
+- **[T1]** `Facts`: currently true or claimed world facts.
+- **[T1]** `Rules`: logic that validates, modifies, rejects, or expands proposed events.
+- **[T1]** `Threads`: active story, conflict, quest, mystery, relationship, or world-event lines.
+- **[T1]** `EventLog`: append-only history of applied world changes.
+- **[T1]** `EventQueue`: proposed or scheduled events not yet applied.
+- **[T1]** `Memory`: durable objective and subjective memory records.
+- **[T1]** `Drivers`: systems that can propose future events.
+- **[T1]** `Views`: projections of world state for narrative, RPG, debugging, or agent contexts.
+- **[T1]** `Metadata`: schema version, source, timestamps, and migration data.
 
 Minimal early world:
 
@@ -133,11 +143,11 @@ World
   Threads
 ```
 
-`Scripts`, `Directors`, and `Views` can begin as second-layer runtime services before they become persisted world fields. This keeps the core from being tied too early to either novel writing or RPG gameplay.
+**[T1]** `Scripts`, `Directors`, and `Views` can begin as second-layer runtime services before they become persisted world fields. This keeps the core from being tied too early to either novel writing or RPG gameplay.
 
 ## Shared Primitive Types
 
-The model should use explicit identifier and time types even if the first Go implementation stores them as strings internally.
+**[T1]** The model should use explicit identifier and time types even if the first Go implementation stores them as strings internally.
 
 Recommended identifier types:
 
@@ -213,7 +223,7 @@ list
 object
 ```
 
-Recommended shared visibility:
+**[T2]** Recommended shared visibility:
 
 ```go
 type Visibility struct {
@@ -240,7 +250,7 @@ secret
 
 ## Canon
 
-`Canon` stores high-level setting constraints and authorial boundaries. It is not current state; it is the baseline used to decide what is plausible, forbidden, or stylistically wrong.
+**[T1]** `Canon` stores high-level setting constraints and authorial boundaries. It is not current state; it is the baseline used to decide what is plausible, forbidden, or stylistically wrong.
 
 Recommended conceptual shape:
 
@@ -251,15 +261,15 @@ type Canon struct {
     StyleGuide  []string
     Premise     string
 
-    Laws        []CanonLaw
-    Boundaries  []CanonBoundary
+    Laws        []CanonLaw       // [T3] currently []string
+    Boundaries  []CanonBoundary  // [T3] currently []string
     Secrets     []EntityID
 
     Metadata    map[string]any
 }
 ```
 
-`CanonLaw` examples:
+**[T3]** `CanonLaw` examples:
 
 ```text
 magic_requires_cost
@@ -268,7 +278,7 @@ royal_city_forbids_open_weapons
 faster_than_light_travel_does_not_exist
 ```
 
-`CanonBoundary` examples:
+**[T3]** `CanonBoundary` examples:
 
 ```text
 no_modern_slang
@@ -281,7 +291,7 @@ Canon should be referenced by rules and views, but ordinary world events should 
 
 ## World Clock
 
-`WorldClock` tracks current world time and the ordering model for events.
+**[T1]** `WorldClock` tracks current world time and the ordering model for events.
 
 Recommended conceptual shape:
 
@@ -298,7 +308,9 @@ type WorldClock struct {
 
 ## Relations
 
-`Relation` is a first-class graph edge between entities. Many story mechanics come from relation changes, so relations should not be buried inside character text.
+**[T1]** `Relation` is a first-class graph edge between entities. Many story mechanics come from relation changes, so relations should not be buried inside character text.
+
+**[T1]** Implemented fields: ID, Type, SourceID, TargetID. **[T2]** Extended fields: Direction, Strength, Confidence, TruthStatus, Visibility, Since/Until, SourceEvent.
 
 Recommended conceptual shape:
 
@@ -347,7 +359,9 @@ Relations can be objective world facts or subjective beliefs. A character may be
 
 ## Facts
 
-`Fact` records claims about the world that rules, memory, views, and directors can query.
+**[T1]** `Fact` records claims about the world that rules, memory, views, and directors can query.
+
+**[T1]** Implemented fields: ID, SubjectID, Predicate, Value. **[T2]** Extended fields: ObjectID, TruthStatus, Confidence, Visibility, SourceEvent, ValidFrom/ValidUntil.
 
 Recommended conceptual shape:
 
@@ -384,9 +398,9 @@ Open design question: `Facts` may become a first-class store, a derived index ov
 
 ## Entity Model
 
-`Entity` should use a unified entity model with typed components. Avoid hardcoding unrelated top-level systems for characters, items, and locations too early.
+**[T1]** `Entity` should use a unified entity model with typed components. Avoid hardcoding unrelated top-level systems for characters, items, and locations too early.
 
-Core idea:
+**[T1]** Core idea:
 
 ```text
 Entity = Identity + Type + Components + State + Tags
@@ -427,28 +441,28 @@ event_anchor
 Example components:
 
 ```text
-ProfileComponent       base identity and human-readable description
-ActorComponent         can act or make decisions
-InventoryComponent     can hold items
-LocationComponent      can contain entities
-SpatialComponent       has location or spatial placement
-RelationshipComponent  has social graph information
-StatsComponent         has numeric or qualitative stats
-SkillComponent         has skills or capabilities
-MemoryComponent        has subjective memory
-DialogueComponent      has voice, style, or speech constraints
-FactionComponent       belongs to or represents factions
-LifecycleComponent     alive, dead, broken, active, sealed, etc.
+[T1] ProfileComponent       base identity and human-readable description
+[T1] ActorComponent         can act or make decisions
+[T1] InventoryComponent     can hold items
+[T2] LocationComponent      can contain entities
+[T1] SpatialComponent       has location or spatial placement
+[T2] RelationshipComponent  has social graph information
+[T1] StatsComponent         has numeric or qualitative stats
+[T2] SkillComponent         has skills or capabilities
+[T2] MemoryComponent        has subjective memory
+[T2] DialogueComponent      has voice, style, or speech constraints
+[T2] FactionComponent       belongs to or represents factions
+[T2] LifecycleComponent     alive, dead, broken, active, sealed, etc.
 ```
 
-Minimal early components:
+**[T1]** Minimal early components:
 
 ```text
 Profile
 Actor
 Spatial
 Inventory
-Memory
+[T2] Memory
 Stats
 ```
 
@@ -465,7 +479,7 @@ What state are they in?
 
 ## Component Definitions
 
-Components should be typed, but they do not need to become a deep inheritance tree. A component says which systems can meaningfully operate on an entity.
+**[T1]** Components should be typed, but they do not need to become a deep inheritance tree. A component says which systems can meaningfully operate on an entity.
 
 Recommended common components:
 
@@ -539,7 +553,7 @@ Entity(type=secret)
   MemoryAnchor
 ```
 
-Reasons to prefer the unified entity model:
+**[T1]** Reasons to prefer the unified entity model:
 
 - Characters, items, and locations do not become three unrelated bottom-level systems.
 - RPG systems, novel systems, and random event systems can read the same entity graph.
@@ -554,11 +568,11 @@ Entity + Relation + Memory changes through Event.
 
 ## Memory Record
 
-Memory should model both objective world knowledge and subjective character belief. It should not be a simple summary log.
+**[T1]** Memory should model both objective world knowledge and subjective character belief. It should not be a simple summary log.
 
-Use one unified `MemoryStore`, with owner and scope fields instead of separate memory systems.
+**[T1]** Use one unified `MemoryStore`, with owner and scope fields instead of separate memory systems.
 
-Memory is not just an archive. It is a source of story pressure. It should support misunderstanding, rumors, concealment, investigation, deception, identity reversal, and character growth.
+**[T1]** Memory is not just an archive. It is a source of story pressure. It should support misunderstanding, rumors, concealment, investigation, deception, identity reversal, and character growth.
 
 ```text
 Memory owner examples:
@@ -593,6 +607,8 @@ These are logical layers over the same record model, not separate storage system
 
 The model must keep objective history separate from subjective belief. Otherwise all characters effectively share an omniscient view, which removes misunderstandings, secrets, deception, investigation, and faction conflict from the story system.
 
+**[T1]** Implemented fields: ID, Owner, Scope, Kind, SubjectIDs, EventIDs, Content, Summary, TruthStatus, Confidence, Importance. **[T2]** Extended fields: Emotion, Source, Visibility, CreatedAt/UpdatedAt/LastAccess, Decay.
+
 Recommended record:
 
 ```go
@@ -611,15 +627,15 @@ type MemoryRecord struct {
     TruthStatus TruthStatus
     Confidence  float64
     Importance  float64
-    Emotion     map[string]float64
+    Emotion     map[string]float64   // [T2]
 
-    Source      MemorySource
-    Visibility  MemoryVisibility
+    Source      MemorySource         // [T2]
+    Visibility  MemoryVisibility     // [T2]
 
-    CreatedAt   WorldTime
-    UpdatedAt   WorldTime
-    LastAccess  WorldTime
-    Decay        MemoryDecay
+    CreatedAt   WorldTime            // [T2]
+    UpdatedAt   WorldTime            // [T2]
+    LastAccess  WorldTime            // [T2]
+    Decay        MemoryDecay         // [T2]
 }
 ```
 
@@ -695,7 +711,7 @@ emotional    affective impression or trauma
 canonical    setting-level memory
 ```
 
-`MemorySource` examples:
+**[T2]** `MemorySource` examples:
 
 ```text
 direct_experience
@@ -706,7 +722,7 @@ author_seed
 script
 ```
 
-`MemoryVisibility` should describe who may retrieve the record:
+**[T2]** `MemoryVisibility` should describe who may retrieve the record:
 
 ```text
 private_to_owner
@@ -716,7 +732,7 @@ gm_only
 narrator_only
 ```
 
-`MemoryDecay` should describe whether the memory fades, remains fixed, or becomes summarized:
+**[T2]** `MemoryDecay` should describe whether the memory fades, remains fixed, or becomes summarized:
 
 ```go
 type MemoryDecay struct {
@@ -738,7 +754,9 @@ archive_after
 
 ## World Event
 
-`Event` should be the only state change entry point. Character actions, random incidents, scripts, external inputs, LLM proposals, and system maintenance should all become events before they change the world.
+**[T1]** `Event` should be the only state change entry point. Character actions, random incidents, scripts, external inputs, LLM proposals, and system maintenance should all become events before they change the world.
+
+**[T1]** Implemented fields: ID, Type, Source, ActorIDs, TargetIDs, LocationID, Intent, Description, Effects. **[T2]** Extended fields: Preconditions, Visibility, Status, Causes, Results, OccurredAt, RecordedAt, Metadata.
 
 Recommended conceptual shape:
 
@@ -773,18 +791,18 @@ type WorldEvent struct {
 
 Important fields:
 
-- `Type`: move, speak, attack, discover, trade, remember, forget, relationship_changed, world_fact_changed, random_incident, and similar event families.
-- `Source`: user input, character self-drive, random director, script, LLM proposal, or system rule.
-- `ActorIDs`, `TargetIDs`, and `LocationID`: participants and setting. Events can attach to characters, items, locations, organizations, secrets, or other entities.
-- `Intent`: why the event was attempted, not just what happened.
-- `Description`: natural-language event description for LLM context, logs, narrative output, and human debugging.
-- `Preconditions`: requirements before an event can apply.
-- `Effects`: declarative world changes.
-- `Visibility`: who can know this event happened.
-- `Status`: proposed, validated, applied, rejected, or rolled back.
-- `Causes` and `Results`: causal chain for replay and explanation.
+- **[T1]** `Type`: move, speak, attack, discover, trade, remember, forget, relationship_changed, world_fact_changed, random_incident, and similar event families.
+- **[T1]** `Source`: user input, character self-drive, random director, script, LLM proposal, or system rule.
+- **[T1]** `ActorIDs`, `TargetIDs`, and `LocationID`: participants and setting. Events can attach to characters, items, locations, organizations, secrets, or other entities.
+- **[T1]** `Intent`: why the event was attempted, not just what happened.
+- **[T1]** `Description`: natural-language event description for LLM context, logs, narrative output, and human debugging.
+- **[T2]** `Preconditions`: requirements before an event can apply.
+- **[T1]** `Effects`: declarative world changes.
+- **[T2]** `Visibility`: who can know this event happened.
+- **[T2]** `Status`: proposed, validated, applied, rejected, or rolled back.
+- **[T2]** `Causes` and `Results`: causal chain for replay and explanation.
 
-Effect examples:
+**[T1]** Effect examples:
 
 ```text
 set_fact
@@ -823,29 +841,29 @@ system_maintenance
 Recommended event sources:
 
 ```text
-user_input
-external_api
-character_director
-random_director
-script_director
-narrative_director
-system_director
-llm_proposal
-rule_generated
+[T1] user_input
+[T2] external_api
+[T2] character_director
+[T1] random_director
+[T1] script_director
+[T2] narrative_director
+[T2] system_director
+[T1] llm_proposal
+[T1] rule_generated
 ```
 
 Recommended event statuses:
 
 ```text
-proposed
-validated
-applied
-rejected
-rolled_back
-superseded
+[T1] proposed
+[T1] validated
+[T1] applied
+[T1] rejected
+[T2] rolled_back
+[T2] superseded
 ```
 
-Recommended visibility values:
+**[T2]** Recommended visibility values:
 
 ```text
 public
@@ -858,7 +876,7 @@ narrator_only
 secret
 ```
 
-Recommended condition shape:
+**[T2]** Recommended condition shape:
 
 ```go
 type Condition struct {
@@ -879,7 +897,7 @@ world.fact:door.locked == false
 character(B).memory:"A killed king".confidence > 0.8
 ```
 
-Recommended effect shape:
+**[T1]** Recommended effect shape:
 
 ```go
 type Effect struct {
@@ -890,7 +908,7 @@ type Effect struct {
 }
 ```
 
-Effect kinds:
+**[T1]** Effect kinds:
 
 ```text
 set_fact
@@ -924,7 +942,7 @@ Event:
 
 ## Rule
 
-`Rule` should cover world constraints, event resolution, and narrative boundaries. It is broader than RPG numeric rules.
+**[T1]** `Rule` should cover world constraints, event resolution, and narrative boundaries. It is broader than RPG numeric rules.
 
 Rule kinds:
 
@@ -961,16 +979,16 @@ type Rule struct {
 Rule actions:
 
 ```text
-allow_event
-reject_event
-modify_event
-add_effect
-require_check
-enqueue_event
-raise_conflict
+[T1] allow_event
+[T1] reject_event
+[T2] modify_event
+[T2] add_effect
+[T2] require_check
+[T2] enqueue_event
+[T2] raise_conflict
 ```
 
-First implementation should prefer Go interfaces over a full DSL:
+**[T1]** First implementation should prefer Go interfaces over a full DSL:
 
 ```go
 type Rule interface {
@@ -1008,12 +1026,12 @@ type RuleDecision struct {
 `RuleDecisionStatus` examples:
 
 ```text
-allow
-reject
-modify
-add_effects
-enqueue_events
-require_resolution
+[T1] allow
+[T1] reject
+[T2] modify
+[T2] add_effects
+[T2] enqueue_events
+[T2] require_resolution
 ```
 
 Example rules:
@@ -1043,9 +1061,11 @@ Then:
 
 ## World Thread
 
-`Thread` is a long-running line of pressure: quest, conflict, mystery, relationship arc, survival pressure, political struggle, personal goal, or world event.
+**[T1]** `Thread` is a long-running line of pressure: quest, conflict, mystery, relationship arc, survival pressure, political struggle, personal goal, or world event.
 
-It should not be called `Plot` at the core layer because `Plot` implies a prewritten outcome. `Thread` can pause, branch, fail, resolve, or be interrupted by events.
+**[T1]** It should not be called `Plot` at the core layer because `Plot` implies a prewritten outcome. `Thread` can pause, branch, fail, resolve, or be interrupted by events.
+
+**[T1]** Implemented fields: ID, Kind, Title, Summary, Status, Priority, Tension, ParticipantIDs, LocationID. **[T2]** Extended fields: OpenedBy, UpdatedBy, Goals, Stakes, Clues, Branches, Deadline, Visibility.
 
 Recommended conceptual shape:
 
@@ -1121,7 +1141,7 @@ Visibility
 
 `Priority` is the current importance of the thread. `Tension` is the dramatic or crisis pressure. Directors can use both values to decide whether to advance, pause, branch, or ignore a thread during a runtime step.
 
-Recommended thread substructures:
+**[T2]** Recommended thread substructures:
 
 ```go
 type ThreadGoal struct {
@@ -1164,7 +1184,7 @@ D wants to hide the truth.
 
 Those goal conflicts should naturally produce event proposals.
 
-Thread visibility should support different views of the same underlying line:
+**[T2]** Thread visibility should support different views of the same underlying line:
 
 ```text
 World view:
@@ -1181,9 +1201,9 @@ Threads should connect goals, stakes, clues, and branches without forcing a fixe
 
 ## Script Model
 
-`Script` is authored structure: quest chains, trigger conditions, planned branches, scene beats, or scenario constraints. It should not be the root world state.
+**[T3]** `Script` is authored structure: quest chains, trigger conditions, planned branches, scene beats, or scenario constraints. It should not be the root world state.
 
-Scripts produce or constrain events through `ScriptDirector`; they should not directly mutate the world.
+**[T3]** Scripts produce or constrain events through `ScriptDirector`; they should not directly mutate the world.
 
 Recommended conceptual shape:
 
@@ -1238,7 +1258,7 @@ type ScriptBranch struct {
 }
 ```
 
-Scripts differ from threads:
+**[T3]** Scripts differ from threads:
 
 ```text
 Script = authored possibility or planned structure.
