@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 
 	"github.com/sizolity/nobody/internal/world/director"
 	directorconfig "github.com/sizolity/nobody/internal/world/director/config"
@@ -13,15 +12,17 @@ import (
 	"github.com/sizolity/nobody/internal/world/runner"
 	worldruntime "github.com/sizolity/nobody/internal/world/runtime"
 	"github.com/sizolity/nobody/internal/world/store"
-	rpgtemplate "github.com/sizolity/nobody/rpg/template"
 )
 
+// runInit creates an empty world snapshot. Product-specific world templates
+// live in their respective product repositories (e.g. Worldline ships
+// fantasy / mystery / scifi / modern templates under rpg/template/); this
+// framework CLI deliberately stays template-free.
 func runInit(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := newFlagSet("init", stderr)
 	workspace := fs.String("workspace", "", "workspace directory")
 	worldID := fs.String("world-id", "", "world id")
 	name := fs.String("name", "", "world name")
-	template := fs.String("template", "", "world template ("+strings.Join(rpgtemplate.TemplateNames(), ", ")+")")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -30,34 +31,12 @@ func runInit(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	var world model.World
-	if *template != "" {
-		tmpl, ok := rpgtemplate.Templates[*template]
-		if !ok {
-			fmt.Fprintf(stderr, "unknown template %q (available: %s)\n", *template, strings.Join(rpgtemplate.TemplateNames(), ", "))
-			return 2
-		}
-		var err error
-		world, err = store.ApplyTemplate(tmpl, *worldID, *name)
-		if err != nil {
-			fmt.Fprintf(stderr, "apply template: %v\n", err)
-			return 1
-		}
-	} else {
-		world = model.World{ID: model.WorldID(*worldID), Name: *name}
-	}
-
+	world := model.World{ID: model.WorldID(*worldID), Name: *name}
 	if err := store.NewFileStore(*workspace).SaveSnapshot(ctx, world); err != nil {
 		fmt.Fprintf(stderr, "init failed: %v\n", err)
 		return 1
 	}
-	entityCount := len(world.Entities)
-	if entityCount > 0 {
-		fmt.Fprintf(stdout, "created world %s from template %q (%d entities, %d facts, %d threads)\n",
-			*worldID, *template, entityCount, len(world.Facts), len(world.Threads))
-	} else {
-		fmt.Fprintf(stdout, "created world %s\n", *worldID)
-	}
+	fmt.Fprintf(stdout, "created world %s\n", *worldID)
 	return 0
 }
 
