@@ -15,6 +15,7 @@ type Runtime struct {
 	Directors         []director.Director
 	EventQueueLimit   int
 	worldRuleRegistry *RuleRegistry
+	postApplyHooks    []PostApplyHook
 }
 
 type StepResult struct {
@@ -107,9 +108,11 @@ func (r Runtime) ApplyEvent(world model.World, event model.WorldEvent) (model.Wo
 	if err := event.Validate(); err != nil {
 		return model.World{}, err
 	}
-	if err := r.evaluateRules(world, event); err != nil {
+	evalResult, err := r.evaluateRules(world, event)
+	if err != nil {
 		return model.World{}, err
 	}
+	event = evalResult.event
 	world = cloneWorldForMutation(world)
 	for i, effect := range event.Effects {
 		var err error
@@ -117,6 +120,10 @@ func (r Runtime) ApplyEvent(world model.World, event model.WorldEvent) (model.Wo
 		if err != nil {
 			return model.World{}, fmt.Errorf("effect %d: %w", i, err)
 		}
+	}
+	world.EventQueue = append(world.EventQueue, evalResult.enqueuedItems...)
+	for _, hook := range r.postApplyHooks {
+		hook(&world, event)
 	}
 	world.EventLog = append(world.EventLog, event)
 	return world, nil
@@ -317,44 +324,53 @@ func advanceClock(clock model.WorldClock) model.WorldClock {
 	return clock
 }
 
-func (r Runtime) evaluateRules(world model.World, event model.WorldEvent) error {
+type ruleEvalResult struct {
+	event         model.WorldEvent
+	enqueuedItems []model.EventQueueItem
+}
+
+func (r Runtime) evaluateRules(world model.World, event model.WorldEvent) (ruleEvalResult, error) {
 	ctx := RuleContext{World: world}
+	result := ruleEvalResult{event: event}
 
-	var worldRules []Rule
+	allRules := r.collectRules(world)
+
+	for _, rule := range allRules {
+		decision := rule.Evaluate(ctx, result.event)
+		if err := decision.Validate(); err != nil {
+			return ruleEvalResult{}, fmt.Errorf("rule %q: %w", rule.ID(), err)
+		}
+		switch decision.Status {
+		case RuleDecisionAllow:
+			continue
+		case RuleDecisionReject:
+			if decision.Reason == "" {
+				return ruleEvalResult{}, fmt.Errorf("rule %q rejected event", rule.ID())
+			}
+			return ruleEvalResult{}, fmt.Errorf("rule %q rejected event: %s", rule.ID(), decision.Reason)
+		case RuleDecisionModify:
+			result.event = *decision.ModifiedEvent
+		case RuleDecisionAddEffect:
+			result.event.Effects = append(result.event.Effects, decision.AddedEffects...)
+		case RuleDecisionEnqueue:
+			for _, ev := range decision.EnqueuedEvents {
+				result.enqueuedItems = append(result.enqueuedItems, model.EventQueueItem{Event: ev})
+			}
+		}
+	}
+	return result, nil
+}
+
+func (r Runtime) collectRules(world model.World) []Rule {
+	var allRules []Rule
 	if r.worldRuleRegistry != nil {
-		var err error
-		worldRules, err = r.worldRuleRegistry.BuildAll(world.Rules)
-		if err != nil {
-			return fmt.Errorf("world rules: %w", err)
+		worldRules, err := r.worldRuleRegistry.BuildAll(world.Rules)
+		if err == nil {
+			allRules = append(allRules, worldRules...)
 		}
 	}
-
-	for _, rule := range worldRules {
-		decision := rule.Evaluate(ctx, event)
-		if err := decision.Validate(); err != nil {
-			return fmt.Errorf("rule %q: %w", rule.ID(), err)
-		}
-		if decision.Status == RuleDecisionReject {
-			if decision.Reason == "" {
-				return fmt.Errorf("rule %q rejected event", rule.ID())
-			}
-			return fmt.Errorf("rule %q rejected event: %s", rule.ID(), decision.Reason)
-		}
-	}
-
-	for _, rule := range r.Rules {
-		decision := rule.Evaluate(ctx, event)
-		if err := decision.Validate(); err != nil {
-			return fmt.Errorf("rule %q: %w", rule.ID(), err)
-		}
-		if decision.Status == RuleDecisionReject {
-			if decision.Reason == "" {
-				return fmt.Errorf("rule %q rejected event", rule.ID())
-			}
-			return fmt.Errorf("rule %q rejected event: %s", rule.ID(), decision.Reason)
-		}
-	}
-	return nil
+	allRules = append(allRules, r.Rules...)
+	return allRules
 }
 
 func applyEffect(world model.World, effect model.Effect) (model.World, error) {

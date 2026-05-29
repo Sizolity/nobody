@@ -48,3 +48,9 @@ func WithEventQueueLimit(limit int) RuntimeOption {
 		rt.EventQueueLimit = limit
 	}
 }
+
+func WithPostApplyHooks(hooks ...PostApplyHook) RuntimeOption {
+	return func(rt *Runtime) {
+		rt.postApplyHooks = append(rt.postApplyHooks, hooks...)
+	}
+}
