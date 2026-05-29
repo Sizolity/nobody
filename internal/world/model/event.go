@@ -12,6 +12,9 @@ type WorldEvent struct {
 	Intent      string     `json:"intent,omitempty"`
 	Description string     `json:"description,omitempty"`
 	Effects     []Effect   `json:"effects,omitempty"`
+	Visibility  *Visibility `json:"visibility,omitempty"`
+	Causes      []EventID   `json:"causes,omitempty"`
+	Results     []EventID   `json:"results,omitempty"`
 }
 
 const (
@@ -46,6 +49,11 @@ func (e WorldEvent) Validate() error {
 	for i, effect := range e.Effects {
 		if err := effect.Validate(); err != nil {
 			return fmt.Errorf("event.effects[%d]: %w", i, err)
+		}
+	}
+	if e.Visibility != nil {
+		if err := e.Visibility.Validate(); err != nil {
+			return fmt.Errorf("event.%w", err)
 		}
 	}
 	return nil

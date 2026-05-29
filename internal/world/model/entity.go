@@ -24,6 +24,10 @@ const (
 	ComponentSpatial   = "spatial"
 	ComponentInventory = "inventory"
 	ComponentStats     = "stats"
+	ComponentSkill     = "skill"
+	ComponentFaction   = "faction"
+	ComponentLifecycle = "lifecycle"
+	ComponentDialogue  = "dialogue"
 )
 
 type ProfileComponent struct {
@@ -46,6 +50,41 @@ type InventoryComponent struct {
 
 type StatsComponent struct {
 	Values map[string]Value
+}
+
+type SkillComponent struct {
+	Skills []Skill
+}
+
+type Skill struct {
+	Name        string
+	Level       float64
+	Description string
+}
+
+type FactionComponent struct {
+	FactionIDs []EntityID
+	Rank       string
+	Loyalty    float64
+}
+
+type LifecycleComponent struct {
+	State string
+}
+
+const (
+	LifecycleAlive    = "alive"
+	LifecycleDead     = "dead"
+	LifecycleBroken   = "broken"
+	LifecycleActive   = "active"
+	LifecycleSealed   = "sealed"
+	LifecycleInactive = "inactive"
+)
+
+type DialogueComponent struct {
+	Voice       string
+	Style       string
+	Constraints []string
 }
 
 func (e Entity) Validate() error {
@@ -146,6 +185,74 @@ func (e Entity) StatsComponent() (StatsComponent, bool) {
 	return StatsComponent{Values: valueMap(data["values"])}, true
 }
 
+func (e Entity) SkillComponent() (SkillComponent, bool) {
+	data, ok := componentObject(e.Components, ComponentSkill)
+	if !ok {
+		return SkillComponent{}, false
+	}
+	if err := validateSkillComponent(data); err != nil {
+		return SkillComponent{}, false
+	}
+	skills := []Skill{}
+	if value, ok := data["skills"]; ok {
+		skills = skillList(value)
+	}
+	return SkillComponent{Skills: skills}, true
+}
+
+func (e Entity) FactionComponent() (FactionComponent, bool) {
+	data, ok := componentObject(e.Components, ComponentFaction)
+	if !ok {
+		return FactionComponent{}, false
+	}
+	if err := validateFactionComponent(data); err != nil {
+		return FactionComponent{}, false
+	}
+	ids := []string{}
+	if value, ok := data["faction_ids"]; ok {
+		ids, _ = stringList(value)
+	}
+	factionIDs := make([]EntityID, len(ids))
+	for i, id := range ids {
+		factionIDs[i] = EntityID(id)
+	}
+	return FactionComponent{
+		FactionIDs: factionIDs,
+		Rank:       stringValue(data, "rank"),
+		Loyalty:    floatValue(data, "loyalty"),
+	}, true
+}
+
+func (e Entity) LifecycleComponent() (LifecycleComponent, bool) {
+	data, ok := componentObject(e.Components, ComponentLifecycle)
+	if !ok {
+		return LifecycleComponent{}, false
+	}
+	if err := validateLifecycleComponent(data); err != nil {
+		return LifecycleComponent{}, false
+	}
+	return LifecycleComponent{State: stringValue(data, "state")}, true
+}
+
+func (e Entity) DialogueComponent() (DialogueComponent, bool) {
+	data, ok := componentObject(e.Components, ComponentDialogue)
+	if !ok {
+		return DialogueComponent{}, false
+	}
+	if err := validateDialogueComponent(data); err != nil {
+		return DialogueComponent{}, false
+	}
+	constraints := []string{}
+	if value, ok := data["constraints"]; ok {
+		constraints, _ = stringList(value)
+	}
+	return DialogueComponent{
+		Voice:       stringValue(data, "voice"),
+		Style:       stringValue(data, "style"),
+		Constraints: append([]string(nil), constraints...),
+	}, true
+}
+
 func validateComponent(key string, component any) error {
 	data, ok := component.(map[string]any)
 	if !ok {
@@ -162,6 +269,14 @@ func validateComponent(key string, component any) error {
 		return validateInventoryComponent(data)
 	case ComponentStats:
 		return validateStatsComponent(data)
+	case ComponentSkill:
+		return validateSkillComponent(data)
+	case ComponentFaction:
+		return validateFactionComponent(data)
+	case ComponentLifecycle:
+		return validateLifecycleComponent(data)
+	case ComponentDialogue:
+		return validateDialogueComponent(data)
 	default:
 		return fmt.Errorf("unsupported component %q", key)
 	}
@@ -222,6 +337,98 @@ func validateStatsComponent(data map[string]any) error {
 	return nil
 }
 
+func validateSkillComponent(data map[string]any) error {
+	if value, ok := data["skills"]; ok {
+		list, ok := value.([]any)
+		if !ok {
+			return fmt.Errorf("skills must be a list")
+		}
+		for i, item := range list {
+			obj, ok := item.(map[string]any)
+			if !ok {
+				return fmt.Errorf("skills[%d] must be an object", i)
+			}
+			if name, ok := obj["name"]; ok {
+				if _, ok := name.(string); !ok {
+					return fmt.Errorf("skills[%d].name must be a string", i)
+				}
+			} else {
+				return fmt.Errorf("skills[%d].name is required", i)
+			}
+			if level, ok := obj["level"]; ok {
+				if _, ok := level.(float64); !ok {
+					return fmt.Errorf("skills[%d].level must be a number", i)
+				}
+			}
+			if desc, ok := obj["description"]; ok {
+				if _, ok := desc.(string); !ok {
+					return fmt.Errorf("skills[%d].description must be a string", i)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func validateFactionComponent(data map[string]any) error {
+	if value, ok := data["faction_ids"]; ok {
+		ids, err := stringList(value)
+		if err != nil {
+			return fmt.Errorf("faction_ids: %w", err)
+		}
+		for i, id := range ids {
+			if err := ValidateID(id); err != nil {
+				return fmt.Errorf("faction_ids[%d]: %w", i, err)
+			}
+		}
+	}
+	if err := optionalStringField(data, "rank"); err != nil {
+		return err
+	}
+	if value, ok := data["loyalty"]; ok {
+		loyalty, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("loyalty must be a number")
+		}
+		if loyalty < 0 || loyalty > 1 {
+			return fmt.Errorf("loyalty must be between 0 and 1")
+		}
+	}
+	return nil
+}
+
+var validLifecycleStates = map[string]bool{
+	LifecycleAlive:    true,
+	LifecycleDead:     true,
+	LifecycleBroken:   true,
+	LifecycleActive:   true,
+	LifecycleSealed:   true,
+	LifecycleInactive: true,
+}
+
+func validateLifecycleComponent(data map[string]any) error {
+	if value, ok := data["state"]; ok {
+		state, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("state must be a string")
+		}
+		if !validLifecycleStates[state] {
+			return fmt.Errorf("state %q is not a supported lifecycle state", state)
+		}
+	}
+	return nil
+}
+
+func validateDialogueComponent(data map[string]any) error {
+	if err := optionalStringField(data, "voice"); err != nil {
+		return err
+	}
+	if err := optionalStringField(data, "style"); err != nil {
+		return err
+	}
+	return optionalStringListField(data, "constraints")
+}
+
 func optionalStringField(data map[string]any, key string) error {
 	if value, ok := data[key]; ok {
 		if _, ok := value.(string); !ok {
@@ -279,6 +486,34 @@ func stringValue(data map[string]any, key string) string {
 func boolValue(data map[string]any, key string) bool {
 	value, _ := data[key].(bool)
 	return value
+}
+
+func floatValue(data map[string]any, key string) float64 {
+	value, _ := data[key].(float64)
+	return value
+}
+
+func skillList(value any) []Skill {
+	list, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]Skill, 0, len(list))
+	for _, item := range list {
+		obj, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		s := Skill{
+			Name:        stringValue(obj, "name"),
+			Description: stringValue(obj, "description"),
+		}
+		if level, ok := obj["level"].(float64); ok {
+			s.Level = level
+		}
+		out = append(out, s)
+	}
+	return out
 }
 
 func valueMap(value any) map[string]Value {
@@ -391,4 +626,52 @@ func NewStatsComponent(values map[string]Value) map[string]any {
 		out[key] = value
 	}
 	return map[string]any{"values": out}
+}
+
+func NewSkillComponent(skills ...Skill) map[string]any {
+	list := make([]any, len(skills))
+	for i, s := range skills {
+		obj := map[string]any{"name": s.Name}
+		if s.Level != 0 {
+			obj["level"] = s.Level
+		}
+		if s.Description != "" {
+			obj["description"] = s.Description
+		}
+		list[i] = obj
+	}
+	return map[string]any{"skills": list}
+}
+
+func NewFactionComponent(factionIDs []EntityID, rank string, loyalty float64) map[string]any {
+	ids := make([]string, len(factionIDs))
+	for i, id := range factionIDs {
+		ids[i] = string(id)
+	}
+	component := map[string]any{
+		"faction_ids": ids,
+		"loyalty":     loyalty,
+	}
+	if rank != "" {
+		component["rank"] = rank
+	}
+	return component
+}
+
+func NewLifecycleComponent(state string) map[string]any {
+	return map[string]any{"state": state}
+}
+
+func NewDialogueComponent(voice, style string, constraints []string) map[string]any {
+	component := map[string]any{}
+	if voice != "" {
+		component["voice"] = voice
+	}
+	if style != "" {
+		component["style"] = style
+	}
+	if len(constraints) > 0 {
+		component["constraints"] = append([]string(nil), constraints...)
+	}
+	return component
 }

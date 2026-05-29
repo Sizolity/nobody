@@ -13,7 +13,11 @@ type MemoryRecord struct {
 	Summary     string      `json:"summary,omitempty"`
 	TruthStatus string      `json:"truth_status,omitempty"`
 	Confidence  float64     `json:"confidence,omitempty"`
-	Importance  float64     `json:"importance,omitempty"`
+	Importance  float64            `json:"importance,omitempty"`
+	Emotion     map[string]float64 `json:"emotion,omitempty"`
+	Source      string             `json:"source,omitempty"`
+	Decay       *MemoryDecay       `json:"decay,omitempty"`
+	Visibility  *Visibility        `json:"visibility,omitempty"`
 }
 
 type MemoryOwner struct {
@@ -43,6 +47,39 @@ const (
 	MemoryKindRumor       = "rumor"
 	MemoryKindSummary     = "summary"
 )
+
+const (
+	MemorySourceDirectExperience = "direct_experience"
+	MemorySourceHearsay          = "hearsay"
+	MemorySourceDeduction        = "deduction"
+	MemorySourceSystemExtraction = "system_extraction"
+	MemorySourceAuthorSeed       = "author_seed"
+	MemorySourceScript           = "script"
+)
+
+type MemoryDecay struct {
+	Mode     string `json:"mode"`
+	HalfLife string `json:"half_life,omitempty"`
+	Preserve bool   `json:"preserve,omitempty"`
+}
+
+const (
+	MemoryDecayNone            = "none"
+	MemoryDecayFadeConfidence  = "fade_confidence"
+	MemoryDecayFadeImportance  = "fade_importance"
+	MemoryDecaySummarizeAfter  = "summarize_after"
+	MemoryDecayArchiveAfter    = "archive_after"
+)
+
+func (d MemoryDecay) Validate() error {
+	if d.Mode == "" {
+		return fmt.Errorf("decay.mode is required")
+	}
+	if !isSupportedDecayMode(d.Mode) {
+		return fmt.Errorf("unsupported decay mode %q", d.Mode)
+	}
+	return nil
+}
 
 const (
 	TruthStatusTrue     = "true"
@@ -91,6 +128,27 @@ func (m MemoryRecord) Validate() error {
 	if m.Importance < 0 || m.Importance > 1 {
 		return fmt.Errorf("memory.importance must be between 0 and 1")
 	}
+	for emotion, val := range m.Emotion {
+		if emotion == "" {
+			return fmt.Errorf("memory.emotion key must not be empty")
+		}
+		if val < -1 || val > 1 {
+			return fmt.Errorf("memory.emotion[%s] must be between -1 and 1", emotion)
+		}
+	}
+	if m.Source != "" && !isSupportedMemorySource(m.Source) {
+		return fmt.Errorf("unsupported memory source %q", m.Source)
+	}
+	if m.Decay != nil {
+		if err := m.Decay.Validate(); err != nil {
+			return fmt.Errorf("memory.%w", err)
+		}
+	}
+	if m.Visibility != nil {
+		if err := m.Visibility.Validate(); err != nil {
+			return fmt.Errorf("memory.%w", err)
+		}
+	}
 	return nil
 }
 
@@ -106,6 +164,26 @@ func isSupportedMemoryScope(scope string) bool {
 func isSupportedMemoryKind(kind string) bool {
 	switch kind {
 	case "", MemoryKindObservation, MemoryKindBelief, MemoryKindRumor, MemoryKindSummary:
+		return true
+	default:
+		return false
+	}
+}
+
+func isSupportedMemorySource(source string) bool {
+	switch source {
+	case MemorySourceDirectExperience, MemorySourceHearsay, MemorySourceDeduction,
+		MemorySourceSystemExtraction, MemorySourceAuthorSeed, MemorySourceScript:
+		return true
+	default:
+		return false
+	}
+}
+
+func isSupportedDecayMode(mode string) bool {
+	switch mode {
+	case MemoryDecayNone, MemoryDecayFadeConfidence, MemoryDecayFadeImportance,
+		MemoryDecaySummarizeAfter, MemoryDecayArchiveAfter:
 		return true
 	default:
 		return false
