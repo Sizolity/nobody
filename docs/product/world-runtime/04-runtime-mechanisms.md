@@ -27,8 +27,8 @@ See `docs/engineering/world-runtime/implementation-status.md` for detailed imple
   -> [T1] Validate Preconditions
   -> [T1] Resolve Rules
   -> [T1] Apply Effects
-  -> [T2] Extract Memories
-  -> [T2] Update Threads
+  -> [T1] Extract Memories
+  -> [T1] Update Threads
   -> [T1] Generate Views
 ```
 
@@ -69,7 +69,7 @@ World truth should not automatically overwrite character memory. Characters upda
 
 `WorldMemory` can be used as the fact anchor for truth reconciliation, but the reconciliation process must decide whether a character actually updates. The result may be direct correction, reduced confidence, suspicion, denial, or an emotional shift.
 
-**[T2]** Recommended memory pipeline:
+**[T1]** Recommended memory pipeline:
 
 ```text
 EventLog
@@ -105,10 +105,10 @@ Rule actions can include:
 ```text
 [T1] allow_event
 [T1] reject_event
-[T2] modify_event
-[T2] add_effect
+[T1] modify_event
+[T1] add_effect
 [T2] require_check
-[T2] enqueue_event
+[T1] enqueue_event
 [T2] raise_conflict
 ```
 
@@ -129,7 +129,7 @@ Event happens
 
 **[T1]** Threads should be long-running pressures, not fixed plots. They can pause, branch, resolve, fail, or be interrupted.
 
-**[T2]** Typical thread mechanisms:
+**[T1]** Typical thread mechanisms:
 
 - increase `Tension` after unresolved conflict;
 - lower `Priority` when a thread becomes dormant;
@@ -154,12 +154,12 @@ type Director interface {
 Director types:
 
 ```text
-[T2] CharacterDirector   proposes character actions from goals, memory, emotion, and state
+[T1] CharacterDirector   proposes character actions from goals, memory, emotion, and state
 [T1] RandomDirector      proposes random incidents from time, place, and probability tables
 [T1] ScriptDirector      proposes authored events from triggers and branches
-[T2] NarrativeDirector   manages pacing, reveals, tension, and scene variety
-[T2] ExternalDirector    turns user or API input into event proposals
-[T2] SystemDirector      proposes maintenance events such as memory compression
+[T1] NarrativeDirector   manages pacing, reveals, tension, and scene variety
+[T1] ExternalDirector    turns user or API input into event proposals
+[T1] SystemDirector      proposes maintenance events such as memory compression
 ```
 
 Director examples:
@@ -205,8 +205,8 @@ Conceptual flow:
   -> [T2] Conflict Resolution
   -> [T2] Event Scheduling
   -> [T1] Effect Application
-  -> [T2] Memory Extraction
-  -> [T2] Thread Update
+  -> [T1] Memory Extraction
+  -> [T1] Thread Update
   -> [T1] View Rendering
   -> [T1] Persisted World State And Logs
 ```
@@ -241,7 +241,7 @@ Minimal early runtime:
 6. Render debug, narrative, or character context views.
 ```
 
-**[T2]** Character self-drive and random directors can be added after the event and memory mechanisms are stable.
+**[T1]** Character self-drive and random directors can be added after the event and memory mechanisms are stable.
 
 ## View Mechanism
 

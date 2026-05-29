@@ -223,7 +223,7 @@ list
 object
 ```
 
-**[T2]** Recommended shared visibility:
+**[T1]** Recommended shared visibility:
 
 ```go
 type Visibility struct {
@@ -310,7 +310,7 @@ type WorldClock struct {
 
 **[T1]** `Relation` is a first-class graph edge between entities. Many story mechanics come from relation changes, so relations should not be buried inside character text.
 
-**[T1]** Implemented fields: ID, Type, SourceID, TargetID. **[T2]** Extended fields: Direction, Strength, Confidence, TruthStatus, Visibility, Since/Until, SourceEvent.
+**[T1]** Implemented fields: ID, Type, SourceID, TargetID, Visibility, SourceEvent, TruthStatus, Confidence. **[T2]** Extended fields: Direction, Strength, Since/Until.
 
 Recommended conceptual shape:
 
@@ -361,7 +361,7 @@ Relations can be objective world facts or subjective beliefs. A character may be
 
 **[T1]** `Fact` records claims about the world that rules, memory, views, and directors can query.
 
-**[T1]** Implemented fields: ID, SubjectID, Predicate, Value. **[T2]** Extended fields: ObjectID, TruthStatus, Confidence, Visibility, SourceEvent, ValidFrom/ValidUntil.
+**[T1]** Implemented fields: ID, SubjectID, Predicate, Value, Visibility, SourceEvent, TruthStatus, Confidence. **[T2]** Extended fields: ObjectID, ValidFrom/ValidUntil.
 
 Recommended conceptual shape:
 
@@ -448,11 +448,11 @@ Example components:
 [T1] SpatialComponent       has location or spatial placement
 [T2] RelationshipComponent  has social graph information
 [T1] StatsComponent         has numeric or qualitative stats
-[T2] SkillComponent         has skills or capabilities
+[T1] SkillComponent         has skills or capabilities
 [T2] MemoryComponent        has subjective memory
-[T2] DialogueComponent      has voice, style, or speech constraints
-[T2] FactionComponent       belongs to or represents factions
-[T2] LifecycleComponent     alive, dead, broken, active, sealed, etc.
+[T1] DialogueComponent      has voice, style, or speech constraints
+[T1] FactionComponent       belongs to or represents factions
+[T1] LifecycleComponent     alive, dead, broken, active, sealed, etc.
 ```
 
 **[T1]** Minimal early components:
@@ -607,7 +607,7 @@ These are logical layers over the same record model, not separate storage system
 
 The model must keep objective history separate from subjective belief. Otherwise all characters effectively share an omniscient view, which removes misunderstandings, secrets, deception, investigation, and faction conflict from the story system.
 
-**[T1]** Implemented fields: ID, Owner, Scope, Kind, SubjectIDs, EventIDs, Content, Summary, TruthStatus, Confidence, Importance. **[T2]** Extended fields: Emotion, Source, Visibility, CreatedAt/UpdatedAt/LastAccess, Decay.
+**[T1]** Implemented fields: ID, Owner, Scope, Kind, SubjectIDs, EventIDs, Content, Summary, TruthStatus, Confidence, Importance, Emotion, Source, Visibility, Decay. **[T2]** Extended fields: CreatedAt/UpdatedAt/LastAccess.
 
 Recommended record:
 
@@ -627,15 +627,15 @@ type MemoryRecord struct {
     TruthStatus TruthStatus
     Confidence  float64
     Importance  float64
-    Emotion     map[string]float64   // [T2]
+    Emotion     map[string]float64   // [T1]
 
-    Source      MemorySource         // [T2]
-    Visibility  MemoryVisibility     // [T2]
+    Source      MemorySource         // [T1]
+    Visibility  MemoryVisibility     // [T1]
 
     CreatedAt   WorldTime            // [T2]
     UpdatedAt   WorldTime            // [T2]
     LastAccess  WorldTime            // [T2]
-    Decay        MemoryDecay         // [T2]
+    Decay        MemoryDecay         // [T1]
 }
 ```
 
@@ -711,7 +711,7 @@ emotional    affective impression or trauma
 canonical    setting-level memory
 ```
 
-**[T2]** `MemorySource` examples:
+**[T1]** `MemorySource` examples:
 
 ```text
 direct_experience
@@ -722,7 +722,7 @@ author_seed
 script
 ```
 
-**[T2]** `MemoryVisibility` should describe who may retrieve the record:
+**[T1]** `MemoryVisibility` should describe who may retrieve the record:
 
 ```text
 private_to_owner
@@ -732,7 +732,7 @@ gm_only
 narrator_only
 ```
 
-**[T2]** `MemoryDecay` should describe whether the memory fades, remains fixed, or becomes summarized:
+**[T1]** `MemoryDecay` should describe whether the memory fades, remains fixed, or becomes summarized:
 
 ```go
 type MemoryDecay struct {
@@ -756,7 +756,7 @@ archive_after
 
 **[T1]** `Event` should be the only state change entry point. Character actions, random incidents, scripts, external inputs, LLM proposals, and system maintenance should all become events before they change the world.
 
-**[T1]** Implemented fields: ID, Type, Source, ActorIDs, TargetIDs, LocationID, Intent, Description, Effects. **[T2]** Extended fields: Preconditions, Visibility, Status, Causes, Results, OccurredAt, RecordedAt, Metadata.
+**[T1]** Implemented fields: ID, Type, Source, ActorIDs, TargetIDs, LocationID, Intent, Description, Effects, Visibility, Causes, Results. **[T2]** Extended fields: Preconditions, Status, OccurredAt, RecordedAt, Metadata.
 
 Recommended conceptual shape:
 
@@ -798,9 +798,9 @@ Important fields:
 - **[T1]** `Description`: natural-language event description for LLM context, logs, narrative output, and human debugging.
 - **[T2]** `Preconditions`: requirements before an event can apply.
 - **[T1]** `Effects`: declarative world changes.
-- **[T2]** `Visibility`: who can know this event happened.
+- **[T1]** `Visibility`: who can know this event happened.
 - **[T2]** `Status`: proposed, validated, applied, rejected, or rolled back.
-- **[T2]** `Causes` and `Results`: causal chain for replay and explanation.
+- **[T1]** `Causes` and `Results`: causal chain for replay and explanation.
 
 **[T1]** Effect examples:
 
@@ -842,12 +842,12 @@ Recommended event sources:
 
 ```text
 [T1] user_input
-[T2] external_api
-[T2] character_director
+[T1] external_api
+[T1] character_director
 [T1] random_director
 [T1] script_director
-[T2] narrative_director
-[T2] system_director
+[T1] narrative_director
+[T1] system_director
 [T1] llm_proposal
 [T1] rule_generated
 ```
@@ -863,7 +863,7 @@ Recommended event statuses:
 [T2] superseded
 ```
 
-**[T2]** Recommended visibility values:
+**[T1]** Recommended visibility values:
 
 ```text
 public
@@ -876,7 +876,7 @@ narrator_only
 secret
 ```
 
-**[T2]** Recommended condition shape:
+**[T1]** Recommended condition shape:
 
 ```go
 type Condition struct {
@@ -981,10 +981,10 @@ Rule actions:
 ```text
 [T1] allow_event
 [T1] reject_event
-[T2] modify_event
-[T2] add_effect
+[T1] modify_event
+[T1] add_effect
 [T2] require_check
-[T2] enqueue_event
+[T1] enqueue_event
 [T2] raise_conflict
 ```
 
@@ -1028,9 +1028,9 @@ type RuleDecision struct {
 ```text
 [T1] allow
 [T1] reject
-[T2] modify
-[T2] add_effects
-[T2] enqueue_events
+[T1] modify
+[T1] add_effects
+[T1] enqueue_events
 [T2] require_resolution
 ```
 
@@ -1065,7 +1065,7 @@ Then:
 
 **[T1]** It should not be called `Plot` at the core layer because `Plot` implies a prewritten outcome. `Thread` can pause, branch, fail, resolve, or be interrupted by events.
 
-**[T1]** Implemented fields: ID, Kind, Title, Summary, Status, Priority, Tension, ParticipantIDs, LocationID. **[T2]** Extended fields: OpenedBy, UpdatedBy, Goals, Stakes, Clues, Branches, Deadline, Visibility.
+**[T1]** Implemented fields: ID, Kind, Title, Summary, Status, Priority, Tension, ParticipantIDs, LocationID, OpenedBy, UpdatedBy, Goals, Stakes, Clues, Branches, Deadline, Visibility.
 
 Recommended conceptual shape:
 
@@ -1141,7 +1141,7 @@ Visibility
 
 `Priority` is the current importance of the thread. `Tension` is the dramatic or crisis pressure. Directors can use both values to decide whether to advance, pause, branch, or ignore a thread during a runtime step.
 
-**[T2]** Recommended thread substructures:
+**[T1]** Recommended thread substructures:
 
 ```go
 type ThreadGoal struct {
@@ -1184,7 +1184,7 @@ D wants to hide the truth.
 
 Those goal conflicts should naturally produce event proposals.
 
-**[T2]** Thread visibility should support different views of the same underlying line:
+**[T1]** Thread visibility should support different views of the same underlying line:
 
 ```text
 World view:

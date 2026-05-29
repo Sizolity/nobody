@@ -65,7 +65,7 @@ Examples:
 
 - **[T1]** novel prose context;
 - **[T2]** RPG scene state;
-- **[T2]** character subjective context;
+- **[T1]** character subjective context;
 - **[T2]** GM hidden state;
 - **[T1]** debug and replay views.
 
