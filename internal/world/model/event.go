@@ -1,20 +1,28 @@
 package model
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 type WorldEvent struct {
-	ID          EventID    `json:"id"`
-	Type        string     `json:"type"`
-	Source      string     `json:"source"`
-	ActorIDs    []EntityID `json:"actor_ids,omitempty"`
-	TargetIDs   []EntityID `json:"target_ids,omitempty"`
-	LocationID  EntityID   `json:"location_id,omitempty"`
-	Intent      string     `json:"intent,omitempty"`
-	Description string     `json:"description,omitempty"`
-	Effects     []Effect   `json:"effects,omitempty"`
-	Visibility  *Visibility `json:"visibility,omitempty"`
-	Causes      []EventID   `json:"causes,omitempty"`
-	Results     []EventID   `json:"results,omitempty"`
+	ID            EventID        `json:"id"`
+	Type          string         `json:"type"`
+	Source        string         `json:"source"`
+	ActorIDs      []EntityID     `json:"actor_ids,omitempty"`
+	TargetIDs     []EntityID     `json:"target_ids,omitempty"`
+	LocationID    EntityID       `json:"location_id,omitempty"`
+	Intent        string         `json:"intent,omitempty"`
+	Description   string         `json:"description,omitempty"`
+	Preconditions []Condition    `json:"preconditions,omitempty"`
+	Effects       []Effect       `json:"effects,omitempty"`
+	Visibility    *Visibility    `json:"visibility,omitempty"`
+	Causes        []EventID      `json:"causes,omitempty"`
+	Results       []EventID      `json:"results,omitempty"`
+	Status        string         `json:"status,omitempty"`
+	OccurredAt    WorldTime      `json:"occurred_at,omitempty"`
+	RecordedAt    time.Time      `json:"recorded_at,omitempty"`
+	Metadata      map[string]any `json:"metadata,omitempty"`
 }
 
 const (
@@ -36,6 +44,15 @@ const (
 	EventSourceDirector = "director"
 )
 
+const (
+	EventStatusProposed   = "proposed"
+	EventStatusValidated  = "validated"
+	EventStatusApplied    = "applied"
+	EventStatusRejected   = "rejected"
+	EventStatusRolledBack = "rolled_back"
+	EventStatusSuperseded = "superseded"
+)
+
 func (e WorldEvent) Validate() error {
 	if err := ValidateID(string(e.ID)); err != nil {
 		return fmt.Errorf("event.id: %w", err)
@@ -45,6 +62,11 @@ func (e WorldEvent) Validate() error {
 	}
 	if e.Source == "" {
 		return fmt.Errorf("event.source is required")
+	}
+	for i, condition := range e.Preconditions {
+		if err := condition.Validate(); err != nil {
+			return fmt.Errorf("event.preconditions[%d]: %w", i, err)
+		}
 	}
 	for i, effect := range e.Effects {
 		if err := effect.Validate(); err != nil {
@@ -56,7 +78,19 @@ func (e WorldEvent) Validate() error {
 			return fmt.Errorf("event.%w", err)
 		}
 	}
+	if e.Status != "" && !isSupportedEventStatus(e.Status) {
+		return fmt.Errorf("unsupported event status %q", e.Status)
+	}
 	return nil
+}
+
+func isSupportedEventStatus(status string) bool {
+	switch status {
+	case EventStatusProposed, EventStatusValidated, EventStatusApplied, EventStatusRejected, EventStatusRolledBack, EventStatusSuperseded:
+		return true
+	default:
+		return false
+	}
 }
 
 type Effect struct {

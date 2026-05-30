@@ -1,8 +1,13 @@
 package runtime
 
-import "github.com/sizolity/nobody/internal/world/director"
+import (
+	"time"
+
+	"github.com/sizolity/nobody/internal/world/director"
+)
 
 type RuntimeOption func(*Runtime)
+type TimeNowFunc func() time.Time
 
 func NewRuntime(options ...RuntimeOption) Runtime {
 	rt := Runtime{Rules: DefaultRules()}
@@ -52,5 +57,11 @@ func WithEventQueueLimit(limit int) RuntimeOption {
 func WithPostApplyHooks(hooks ...PostApplyHook) RuntimeOption {
 	return func(rt *Runtime) {
 		rt.postApplyHooks = append(rt.postApplyHooks, hooks...)
+	}
+}
+
+func WithTimeNow(now TimeNowFunc) RuntimeOption {
+	return func(rt *Runtime) {
+		rt.timeNow = now
 	}
 }

@@ -30,14 +30,31 @@ type RuleDecision struct {
 	// EnqueuedEvents is set when Status == RuleDecisionEnqueue.
 	// These events are added to the world's EventQueue after the current event is applied.
 	EnqueuedEvents []model.WorldEvent
+
+	// CheckDescription is set when Status == RuleDecisionRequireCheck.
+	// Describes what needs to be checked/reviewed before the event can proceed.
+	CheckDescription string
+
+	// ConflictDetails is set when Status == RuleDecisionRaiseConflict.
+	// Structured conflict info for the caller to resolve.
+	ConflictDetails *RuleConflict
+}
+
+type RuleConflict struct {
+	Kind           string          `json:"kind"`
+	Description    string          `json:"description"`
+	ConflictingIDs []model.EventID `json:"conflicting_ids,omitempty"`
+	Suggestions    []string        `json:"suggestions,omitempty"`
 }
 
 const (
-	RuleDecisionAllow     = "allow"
-	RuleDecisionReject    = "reject"
-	RuleDecisionModify    = "modify"
-	RuleDecisionAddEffect = "add_effect"
-	RuleDecisionEnqueue   = "enqueue"
+	RuleDecisionAllow         = "allow"
+	RuleDecisionReject        = "reject"
+	RuleDecisionModify        = "modify"
+	RuleDecisionAddEffect     = "add_effect"
+	RuleDecisionEnqueue       = "enqueue"
+	RuleDecisionRequireCheck  = "require_check"
+	RuleDecisionRaiseConflict = "raise_conflict"
 )
 
 func (d RuleDecision) Validate() error {
@@ -59,7 +76,38 @@ func (d RuleDecision) Validate() error {
 			return fmt.Errorf("enqueue decision requires at least one event")
 		}
 		return nil
+	case RuleDecisionRequireCheck:
+		if d.CheckDescription == "" {
+			return fmt.Errorf("require_check decision requires CheckDescription")
+		}
+		return nil
+	case RuleDecisionRaiseConflict:
+		if d.ConflictDetails == nil {
+			return fmt.Errorf("raise_conflict decision requires ConflictDetails")
+		}
+		if d.ConflictDetails.Description == "" {
+			return fmt.Errorf("raise_conflict decision requires non-empty ConflictDetails.Description")
+		}
+		return nil
 	default:
 		return fmt.Errorf("unsupported rule decision status %q", d.Status)
 	}
+}
+
+type RequireCheckError struct {
+	RuleID      model.RuleID
+	Description string
+}
+
+func (e *RequireCheckError) Error() string {
+	return fmt.Sprintf("rule %q requires check: %s", e.RuleID, e.Description)
+}
+
+type RaiseConflictError struct {
+	RuleID   model.RuleID
+	Conflict RuleConflict
+}
+
+func (e *RaiseConflictError) Error() string {
+	return fmt.Sprintf("rule %q raised conflict: %s", e.RuleID, e.Conflict.Description)
 }

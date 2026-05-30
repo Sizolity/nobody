@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/sizolity/nobody/internal/world/director"
 	"github.com/sizolity/nobody/internal/world/model"
@@ -68,6 +69,56 @@ func TestRuntimeStepAppliesDirectorProposals(t *testing.T) {
 	}
 	if len(got.World.EventLog) != 1 || got.World.EventLog[0].ID != "event_1" {
 		t.Fatalf("event was not logged: %#v", got.World.EventLog)
+	}
+}
+
+func TestRuntimeStepReturnsAppliedLifecycleEvent(t *testing.T) {
+	t.Parallel()
+
+	recordedAt := time.Date(2026, time.May, 29, 12, 0, 0, 0, time.UTC)
+	rt := NewRuntime(
+		WithDirectors(director.NewScriptDirector("script_1", []model.WorldEvent{{
+			ID:          "event_original",
+			Type:        model.EventTypeNote,
+			Source:      model.EventSourceDirector,
+			Description: "original",
+		}})),
+		WithRules(dynamicRule{
+			id: "rule_modify",
+			fn: func(_ RuleContext, event model.WorldEvent) RuleDecision {
+				event.Description = "modified"
+				return RuleDecision{Status: RuleDecisionModify, ModifiedEvent: &event}
+			},
+		}),
+		WithTimeNow(func() time.Time { return recordedAt }),
+	)
+	world := model.World{
+		ID:   "world_1",
+		Name: "World",
+		Clock: model.WorldClock{
+			Current: model.WorldTime{Kind: model.WorldTimeTick, Tick: 4},
+		},
+	}
+
+	got, err := rt.Step(bg, world)
+	if err != nil {
+		t.Fatalf("Step returned error: %v", err)
+	}
+	if len(got.AppliedEvents) != 1 {
+		t.Fatalf("AppliedEvents length = %d, want 1", len(got.AppliedEvents))
+	}
+	applied := got.AppliedEvents[0]
+	if applied.Description != "modified" {
+		t.Fatalf("AppliedEvents[0].Description = %q, want modified", applied.Description)
+	}
+	if applied.Status != model.EventStatusApplied {
+		t.Fatalf("AppliedEvents[0].Status = %q, want %q", applied.Status, model.EventStatusApplied)
+	}
+	if applied.OccurredAt.Kind != model.WorldTimeTick || applied.OccurredAt.Tick != 4 {
+		t.Fatalf("AppliedEvents[0].OccurredAt = %#v, want tick 4", applied.OccurredAt)
+	}
+	if !applied.RecordedAt.Equal(recordedAt) {
+		t.Fatalf("AppliedEvents[0].RecordedAt = %s, want %s", applied.RecordedAt, recordedAt)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/sizolity/nobody/internal/world/director"
 	"github.com/sizolity/nobody/internal/world/model"
@@ -16,6 +17,7 @@ type Runtime struct {
 	EventQueueLimit   int
 	worldRuleRegistry *RuleRegistry
 	postApplyHooks    []PostApplyHook
+	timeNow           TimeNowFunc
 }
 
 type StepResult struct {
@@ -44,8 +46,9 @@ func (r Runtime) Step(ctx context.Context, world model.World) (StepResult, error
 		if err != nil {
 			return result, fmt.Errorf("proposal %d: %w", i, err)
 		}
+		applied := latestAppliedEvent(next)
 		result.World = next
-		result.AppliedEvents = append(result.AppliedEvents, proposal)
+		result.AppliedEvents = append(result.AppliedEvents, applied)
 	}
 	retriedThisStep := map[model.EventID]bool{}
 	for i := 0; i < r.EventQueueLimit && len(result.World.EventQueue) > 0; i++ {
@@ -74,8 +77,9 @@ func (r Runtime) Step(ctx context.Context, world model.World) (StepResult, error
 				return result, fmt.Errorf("queued event %d: %w", i, err)
 			}
 		}
+		applied := latestAppliedEvent(next)
 		result.World = next
-		result.AppliedEvents = append(result.AppliedEvents, item.Event)
+		result.AppliedEvents = append(result.AppliedEvents, applied)
 	}
 	result.World.Clock = advanceClock(result.World.Clock)
 	return result, nil
@@ -114,6 +118,12 @@ func (r Runtime) ApplyEvent(world model.World, event model.WorldEvent) (model.Wo
 	}
 	event = evalResult.event
 	world = cloneWorldForMutation(world)
+	if err := evaluateEventPreconditions(world, event); err != nil {
+		return world, err
+	}
+	if isZeroWorldTime(event.OccurredAt) {
+		event.OccurredAt = world.Clock.Current
+	}
 	for i, effect := range event.Effects {
 		var err error
 		world, err = applyEffect(world, effect)
@@ -125,8 +135,27 @@ func (r Runtime) ApplyEvent(world model.World, event model.WorldEvent) (model.Wo
 	for _, hook := range r.postApplyHooks {
 		hook(&world, event)
 	}
+	event.Status = model.EventStatusApplied
+	if event.RecordedAt.IsZero() {
+		event.RecordedAt = r.now()
+	}
 	world.EventLog = append(world.EventLog, event)
 	return world, nil
+}
+
+func latestAppliedEvent(world model.World) model.WorldEvent {
+	return world.EventLog[len(world.EventLog)-1]
+}
+
+func (r Runtime) now() time.Time {
+	if r.timeNow != nil {
+		return r.timeNow()
+	}
+	return time.Now()
+}
+
+func isZeroWorldTime(value model.WorldTime) bool {
+	return value.Kind == "" && value.Tick == 0 && value.Label == "" && len(value.Calendar) == 0
 }
 
 func cloneWorldForMutation(world model.World) model.World {
@@ -183,9 +212,7 @@ func cloneMemories(memories []model.MemoryRecord) []model.MemoryRecord {
 func cloneEvents(events []model.WorldEvent) []model.WorldEvent {
 	out := slices.Clone(events)
 	for i := range out {
-		out[i].ActorIDs = slices.Clone(out[i].ActorIDs)
-		out[i].TargetIDs = slices.Clone(out[i].TargetIDs)
-		out[i].Effects = cloneEffects(out[i].Effects)
+		out[i] = cloneEvent(out[i])
 	}
 	return out
 }
@@ -193,12 +220,22 @@ func cloneEvents(events []model.WorldEvent) []model.WorldEvent {
 func cloneEventQueue(queue []model.EventQueueItem) []model.EventQueueItem {
 	out := slices.Clone(queue)
 	for i := range out {
-		out[i].Event.ActorIDs = slices.Clone(out[i].Event.ActorIDs)
-		out[i].Event.TargetIDs = slices.Clone(out[i].Event.TargetIDs)
-		out[i].Event.Effects = cloneEffects(out[i].Event.Effects)
+		out[i].Event = cloneEvent(out[i].Event)
 		out[i].NotBefore.Calendar = cloneIntMap(out[i].NotBefore.Calendar)
 	}
 	return out
+}
+
+func cloneEvent(event model.WorldEvent) model.WorldEvent {
+	event.ActorIDs = slices.Clone(event.ActorIDs)
+	event.TargetIDs = slices.Clone(event.TargetIDs)
+	event.Preconditions = slices.Clone(event.Preconditions)
+	event.Effects = cloneEffects(event.Effects)
+	event.Causes = slices.Clone(event.Causes)
+	event.Results = slices.Clone(event.Results)
+	event.OccurredAt.Calendar = cloneIntMap(event.OccurredAt.Calendar)
+	event.Metadata = cloneAnyMap(event.Metadata)
+	return event
 }
 
 func cloneEffects(effects []model.Effect) []model.Effect {
@@ -355,6 +392,16 @@ func (r Runtime) evaluateRules(world model.World, event model.WorldEvent) (ruleE
 		case RuleDecisionEnqueue:
 			for _, ev := range decision.EnqueuedEvents {
 				result.enqueuedItems = append(result.enqueuedItems, model.EventQueueItem{Event: ev})
+			}
+		case RuleDecisionRequireCheck:
+			return ruleEvalResult{}, &RequireCheckError{
+				RuleID:      rule.ID(),
+				Description: decision.CheckDescription,
+			}
+		case RuleDecisionRaiseConflict:
+			return ruleEvalResult{}, &RaiseConflictError{
+				RuleID:   rule.ID(),
+				Conflict: *decision.ConflictDetails,
 			}
 		}
 	}
@@ -557,6 +604,7 @@ func applyReviseMemory(world model.World, effect model.Effect) (model.World, err
 		if _, ok := effect.Payload["importance"]; ok {
 			memory.Importance = payloadOptionalFloat(effect, "importance")
 		}
+		memory.UpdatedAt = world.Clock.Current
 		if err := memory.Validate(); err != nil {
 			return model.World{}, err
 		}
@@ -583,6 +631,7 @@ func applyReconcileMemory(world model.World, effect model.Effect) (model.World, 
 		if _, ok := effect.Payload["confidence_delta"]; ok {
 			memory.Confidence = clamp01(memory.Confidence + payloadOptionalFloat(effect, "confidence_delta"))
 		}
+		memory.UpdatedAt = world.Clock.Current
 		if err := memory.Validate(); err != nil {
 			return model.World{}, err
 		}

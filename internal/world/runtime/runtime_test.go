@@ -2,7 +2,10 @@ package runtime
 
 import (
 	"math"
+	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/sizolity/nobody/internal/world/model"
 )
@@ -32,6 +35,81 @@ func TestRuntimeAppliesEventToEventLog(t *testing.T) {
 	}
 	if len(got.EventLog) != 1 || got.EventLog[0].ID != event.ID {
 		t.Fatalf("EventLog mismatch: %#v", got.EventLog)
+	}
+}
+
+func TestRuntimeApplyEventRecordsLifecycleDefaults(t *testing.T) {
+	t.Parallel()
+
+	recordedAt := time.Date(2026, time.May, 29, 10, 30, 0, 0, time.UTC)
+	occurredAt := model.WorldTime{Kind: model.WorldTimeTick, Tick: 7}
+	rt := NewRuntime(
+		WithoutRules(),
+		WithTimeNow(func() time.Time { return recordedAt }),
+	)
+	world := model.World{
+		ID:   "test_world",
+		Name: "Test World",
+		Clock: model.WorldClock{
+			Current: occurredAt,
+		},
+	}
+	event := model.WorldEvent{ID: "event_1", Type: model.EventTypeNote, Source: model.EventSourceTest}
+
+	got, err := rt.ApplyEvent(world, event)
+	if err != nil {
+		t.Fatalf("ApplyEvent returned error: %v", err)
+	}
+	if len(got.EventLog) != 1 {
+		t.Fatalf("EventLog length = %d, want 1", len(got.EventLog))
+	}
+	logged := got.EventLog[0]
+	if logged.Status != model.EventStatusApplied {
+		t.Fatalf("Status = %q, want %q", logged.Status, model.EventStatusApplied)
+	}
+	if !reflect.DeepEqual(logged.OccurredAt, occurredAt) {
+		t.Fatalf("OccurredAt = %#v, want %#v", logged.OccurredAt, occurredAt)
+	}
+	if !logged.RecordedAt.Equal(recordedAt) {
+		t.Fatalf("RecordedAt = %s, want %s", logged.RecordedAt, recordedAt)
+	}
+}
+
+func TestRuntimeApplyEventPreservesLifecycleTimestamps(t *testing.T) {
+	t.Parallel()
+
+	recordedAt := time.Date(2026, time.May, 29, 10, 30, 0, 0, time.UTC)
+	suppliedRecordedAt := time.Date(2026, time.May, 28, 9, 15, 0, 0, time.UTC)
+	suppliedOccurredAt := model.WorldTime{Kind: model.WorldTimeScene, Tick: 3, Label: "arrival"}
+	rt := NewRuntime(
+		WithoutRules(),
+		WithTimeNow(func() time.Time { return recordedAt }),
+	)
+	world := model.World{
+		ID:   "test_world",
+		Name: "Test World",
+		Clock: model.WorldClock{
+			Current: model.WorldTime{Kind: model.WorldTimeTick, Tick: 7},
+		},
+	}
+	event := model.WorldEvent{
+		ID:         "event_1",
+		Type:       model.EventTypeNote,
+		Source:     model.EventSourceTest,
+		OccurredAt: suppliedOccurredAt,
+		RecordedAt: suppliedRecordedAt,
+	}
+
+	got, err := rt.ApplyEvent(world, event)
+	if err != nil {
+		t.Fatalf("ApplyEvent returned error: %v", err)
+	}
+	logged := got.EventLog[0]
+	if !reflect.DeepEqual(logged.OccurredAt, suppliedOccurredAt) {
+		t.Fatalf("OccurredAt = %#v, want %#v", logged.OccurredAt, suppliedOccurredAt)
+	}
+	if !logged.RecordedAt.Equal(suppliedRecordedAt) {
+		t.Fatalf("RecordedAt = %s, want %s", logged.RecordedAt, suppliedRecordedAt)
 	}
 }
 
@@ -93,6 +171,172 @@ func TestRuntimeAppliesUpdateEntityStateEffect(t *testing.T) {
 	}
 	if got.Entities["door_1"].State["locked"].Raw != true {
 		t.Fatalf("entity state not updated: %#v", got.Entities["door_1"].State)
+	}
+}
+
+func TestRuntimeApplyEventFailsPreconditionBeforeEffectsAndLog(t *testing.T) {
+	t.Parallel()
+
+	world := model.World{
+		ID:   "test_world",
+		Name: "Test World",
+		Entities: map[model.EntityID]model.Entity{
+			"door_1": {
+				ID:   "door_1",
+				Type: "door",
+				Name: "Door",
+				State: map[string]model.Value{
+					"locked": {Kind: model.ValueKindBoolean, Raw: true},
+				},
+			},
+		},
+	}
+	event := model.WorldEvent{
+		ID:     "event_1",
+		Type:   model.EventTypeNote,
+		Source: model.EventSourceTest,
+		Preconditions: []model.Condition{{
+			Kind:     model.ConditionKindState,
+			Path:     "entity.door_1.state.locked",
+			Operator: "==",
+			Value:    model.Value{Kind: model.ValueKindBoolean, Raw: false},
+		}},
+		Effects: []model.Effect{{
+			Kind:     model.EffectUpdateEntityState,
+			TargetID: "door_1",
+			Payload: map[string]model.Value{
+				"locked": {Kind: model.ValueKindBoolean, Raw: false},
+			},
+		}},
+	}
+
+	got, err := NewRuntime(WithoutRules()).ApplyEvent(world, event)
+	if err == nil {
+		t.Fatal("ApplyEvent returned nil for failed precondition")
+	}
+	if !strings.Contains(err.Error(), "precondition 0") {
+		t.Fatalf("ApplyEvent error = %q, want precondition index", err.Error())
+	}
+	if got.Entities["door_1"].State["locked"].Raw != true {
+		t.Fatalf("failed precondition mutated state: %#v", got.Entities["door_1"].State)
+	}
+	if len(got.EventLog) != 0 {
+		t.Fatalf("failed precondition appended event log: %#v", got.EventLog)
+	}
+}
+
+func TestRuntimeApplyEventSupportsActorStatePreconditions(t *testing.T) {
+	t.Parallel()
+
+	world := model.World{
+		ID:   "test_world",
+		Name: "Test World",
+		Entities: map[model.EntityID]model.Entity{
+			"char_alice": {
+				ID:   "char_alice",
+				Type: "character",
+				Name: "Alice",
+				State: map[string]model.Value{
+					"mood": {Kind: model.ValueKindString, Raw: "curious"},
+				},
+			},
+		},
+	}
+	event := model.WorldEvent{
+		ID:       "event_1",
+		Type:     model.EventTypeNote,
+		Source:   model.EventSourceTest,
+		ActorIDs: []model.EntityID{"char_alice"},
+		Preconditions: []model.Condition{
+			{Kind: model.ConditionKindState, Path: "actor.state.mood", Operator: "==", Value: model.Value{Kind: model.ValueKindString, Raw: "curious"}},
+			{Kind: model.ConditionKindState, Path: "actor.state.mood", Operator: "exists"},
+		},
+	}
+
+	got, err := NewRuntime(WithoutRules()).ApplyEvent(world, event)
+	if err != nil {
+		t.Fatalf("ApplyEvent returned error: %v", err)
+	}
+	if len(got.EventLog) != 1 {
+		t.Fatalf("EventLog length = %d, want 1", len(got.EventLog))
+	}
+}
+
+func TestRuntimeApplyEventSupportsFactAndRelationPreconditions(t *testing.T) {
+	t.Parallel()
+
+	world := model.World{
+		ID:   "test_world",
+		Name: "Test World",
+		Facts: []model.Fact{{
+			ID:        "fact_door_locked",
+			SubjectID: "door_1",
+			Predicate: "locked",
+			Value:     model.Value{Kind: model.ValueKindBoolean, Raw: true},
+		}},
+		Relations: []model.Relation{{
+			ID:       "rel_alice_owns_key",
+			Type:     "owns",
+			SourceID: "char_alice",
+			TargetID: "key_1",
+		}},
+	}
+	event := model.WorldEvent{
+		ID:     "event_1",
+		Type:   model.EventTypeNote,
+		Source: model.EventSourceTest,
+		Preconditions: []model.Condition{
+			{Kind: model.ConditionKindFact, Path: "fact_door_locked", Operator: "exists"},
+			{Kind: model.ConditionKindFact, Path: "fact_missing", Operator: "not_exists"},
+			{Kind: model.ConditionKindRelation, Path: "rel_alice_owns_key", Operator: "exists"},
+			{Kind: model.ConditionKindRelation, Path: "rel_missing", Operator: "not_exists"},
+		},
+	}
+
+	got, err := NewRuntime(WithoutRules()).ApplyEvent(world, event)
+	if err != nil {
+		t.Fatalf("ApplyEvent returned error: %v", err)
+	}
+	if len(got.EventLog) != 1 {
+		t.Fatalf("EventLog length = %d, want 1", len(got.EventLog))
+	}
+}
+
+func TestRuntimeApplyEventReportsUnsupportedPreconditionOperator(t *testing.T) {
+	t.Parallel()
+
+	world := model.World{
+		ID:   "test_world",
+		Name: "Test World",
+		Entities: map[model.EntityID]model.Entity{
+			"door_1": {
+				ID:   "door_1",
+				Type: "door",
+				Name: "Door",
+				State: map[string]model.Value{
+					"locked": {Kind: model.ValueKindBoolean, Raw: true},
+				},
+			},
+		},
+	}
+	event := model.WorldEvent{
+		ID:     "event_1",
+		Type:   model.EventTypeNote,
+		Source: model.EventSourceTest,
+		Preconditions: []model.Condition{{
+			Kind:     model.ConditionKindState,
+			Path:     "entity.door_1.state.locked",
+			Operator: ">",
+			Value:    model.Value{Kind: model.ValueKindBoolean, Raw: false},
+		}},
+	}
+
+	_, err := NewRuntime(WithoutRules()).ApplyEvent(world, event)
+	if err == nil {
+		t.Fatal("ApplyEvent returned nil for unsupported precondition operator")
+	}
+	if !strings.Contains(err.Error(), `unsupported state precondition operator ">"`) {
+		t.Fatalf("ApplyEvent error = %q, want unsupported operator", err.Error())
 	}
 }
 
@@ -489,6 +733,138 @@ func TestRuntimeRejectsReconcileMissingMemory(t *testing.T) {
 
 	if _, err := rt.ApplyEvent(world, event); err == nil {
 		t.Fatal("ApplyEvent returned nil for missing memory")
+	}
+}
+
+func TestReviseMemoryUpdatesUpdatedAt(t *testing.T) {
+	t.Parallel()
+
+	rt := Runtime{}
+	createdTime := model.WorldTime{Kind: model.WorldTimeTick, Tick: 1, Label: "morning"}
+	revisedTime := model.WorldTime{Kind: model.WorldTimeTick, Tick: 5, Label: "evening"}
+	world := model.World{
+		ID:   "test_world",
+		Name: "Test World",
+		Clock: model.WorldClock{
+			Current: revisedTime,
+		},
+		Memory: []model.MemoryRecord{{
+			ID:          "memory_1",
+			Owner:       model.MemoryOwner{Kind: model.MemoryOwnerKindCharacter, ID: "char_c"},
+			Content:     "Original content",
+			TruthStatus: model.TruthStatusTrue,
+			CreatedAt:   createdTime,
+			UpdatedAt:   createdTime,
+		}},
+	}
+	event := model.WorldEvent{
+		ID:     "event_1",
+		Type:   model.EventTypeRemember,
+		Source: model.EventSourceTest,
+		Effects: []model.Effect{{
+			Kind:     model.EffectReviseMemory,
+			TargetID: "memory_1",
+			Payload: map[string]model.Value{
+				"content": {Kind: model.ValueKindString, Raw: "Revised content"},
+			},
+		}},
+	}
+
+	got, err := rt.ApplyEvent(world, event)
+	if err != nil {
+		t.Fatalf("ApplyEvent returned error: %v", err)
+	}
+	if !reflect.DeepEqual(got.Memory[0].UpdatedAt, revisedTime) {
+		t.Errorf("UpdatedAt = %+v, want %+v", got.Memory[0].UpdatedAt, revisedTime)
+	}
+}
+
+func TestReviseMemoryPreservesCreatedAt(t *testing.T) {
+	t.Parallel()
+
+	rt := Runtime{}
+	createdTime := model.WorldTime{Kind: model.WorldTimeTick, Tick: 1}
+	world := model.World{
+		ID:   "test_world",
+		Name: "Test World",
+		Clock: model.WorldClock{
+			Current: model.WorldTime{Kind: model.WorldTimeTick, Tick: 99},
+		},
+		Memory: []model.MemoryRecord{{
+			ID:          "memory_1",
+			Owner:       model.MemoryOwner{Kind: model.MemoryOwnerKindCharacter, ID: "char_c"},
+			Content:     "Original",
+			TruthStatus: model.TruthStatusTrue,
+			CreatedAt:   createdTime,
+			UpdatedAt:   createdTime,
+		}},
+	}
+	event := model.WorldEvent{
+		ID:     "event_1",
+		Type:   model.EventTypeRemember,
+		Source: model.EventSourceTest,
+		Effects: []model.Effect{{
+			Kind:     model.EffectReviseMemory,
+			TargetID: "memory_1",
+			Payload: map[string]model.Value{
+				"content": {Kind: model.ValueKindString, Raw: "Changed"},
+			},
+		}},
+	}
+
+	got, err := rt.ApplyEvent(world, event)
+	if err != nil {
+		t.Fatalf("ApplyEvent returned error: %v", err)
+	}
+	if !reflect.DeepEqual(got.Memory[0].CreatedAt, createdTime) {
+		t.Errorf("CreatedAt = %+v, want %+v (should be preserved)", got.Memory[0].CreatedAt, createdTime)
+	}
+}
+
+func TestReconcileMemoryUpdatesUpdatedAt(t *testing.T) {
+	t.Parallel()
+
+	rt := Runtime{}
+	createdTime := model.WorldTime{Kind: model.WorldTimeTick, Tick: 2}
+	reconcileTime := model.WorldTime{Kind: model.WorldTimeTick, Tick: 8}
+	world := model.World{
+		ID:   "test_world",
+		Name: "Test World",
+		Clock: model.WorldClock{
+			Current: reconcileTime,
+		},
+		Memory: []model.MemoryRecord{{
+			ID:          "memory_1",
+			Owner:       model.MemoryOwner{Kind: model.MemoryOwnerKindCharacter, ID: "char_c"},
+			Content:     "Some belief",
+			TruthStatus: model.TruthStatusUnknown,
+			Confidence:  0.8,
+			CreatedAt:   createdTime,
+			UpdatedAt:   createdTime,
+		}},
+	}
+	event := model.WorldEvent{
+		ID:     "event_1",
+		Type:   model.EventTypeRemember,
+		Source: model.EventSourceTest,
+		Effects: []model.Effect{{
+			Kind:     model.EffectReconcileMemory,
+			TargetID: "memory_1",
+			Payload: map[string]model.Value{
+				"truth_status": {Kind: model.ValueKindString, Raw: model.TruthStatusDisputed},
+			},
+		}},
+	}
+
+	got, err := rt.ApplyEvent(world, event)
+	if err != nil {
+		t.Fatalf("ApplyEvent returned error: %v", err)
+	}
+	if !reflect.DeepEqual(got.Memory[0].UpdatedAt, reconcileTime) {
+		t.Errorf("UpdatedAt = %+v, want %+v", got.Memory[0].UpdatedAt, reconcileTime)
+	}
+	if !reflect.DeepEqual(got.Memory[0].CreatedAt, createdTime) {
+		t.Errorf("CreatedAt = %+v, want %+v (should be preserved)", got.Memory[0].CreatedAt, createdTime)
 	}
 }
 

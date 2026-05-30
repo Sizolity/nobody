@@ -18,6 +18,9 @@ type MemoryRecord struct {
 	Source      string             `json:"source,omitempty"`
 	Decay       *MemoryDecay       `json:"decay,omitempty"`
 	Visibility  *Visibility        `json:"visibility,omitempty"`
+	CreatedAt   WorldTime          `json:"created_at,omitempty"`
+	UpdatedAt   WorldTime          `json:"updated_at,omitempty"`
+	LastAccess  WorldTime          `json:"last_access,omitempty"`
 }
 
 type MemoryOwner struct {

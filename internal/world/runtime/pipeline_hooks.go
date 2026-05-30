@@ -31,6 +31,8 @@ func AutoExtractMemory() PostApplyHook {
 				Importance:  0.5,
 				Source:      model.MemorySourceDirectExperience,
 				EventIDs:    []model.EventID{event.ID},
+				CreatedAt:   world.Clock.Current,
+				UpdatedAt:   world.Clock.Current,
 			})
 		}
 	}

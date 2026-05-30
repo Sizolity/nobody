@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/sizolity/nobody/internal/world/model"
@@ -238,6 +239,71 @@ func TestMultipleHooksRunInOrder(t *testing.T) {
 	}
 	if len(order) != 3 || order[0] != "A" || order[1] != "B" || order[2] != "C" {
 		t.Fatalf("hook execution order = %v, want [A B C]", order)
+	}
+}
+
+func TestAutoExtractMemorySetsCreatedAtAndUpdatedAt(t *testing.T) {
+	t.Parallel()
+
+	rt := NewRuntime(WithoutRules(), WithPostApplyHooks(AutoExtractMemory()))
+	world := model.World{
+		ID:   "test_world",
+		Name: "Test World",
+		Clock: model.WorldClock{
+			Current: model.WorldTime{Kind: model.WorldTimeTick, Tick: 42, Label: "dawn"},
+		},
+	}
+	event := model.WorldEvent{
+		ID:          "event_1",
+		Type:        model.EventTypeNote,
+		Source:      model.EventSourceTest,
+		Description: "The sun rises",
+		ActorIDs:    []model.EntityID{"char_a"},
+	}
+
+	got, err := rt.ApplyEvent(world, event)
+	if err != nil {
+		t.Fatalf("ApplyEvent returned error: %v", err)
+	}
+	if len(got.Memory) != 1 {
+		t.Fatalf("Memory length = %d, want 1", len(got.Memory))
+	}
+	mem := got.Memory[0]
+	wantTime := model.WorldTime{Kind: model.WorldTimeTick, Tick: 42, Label: "dawn"}
+	if !reflect.DeepEqual(mem.CreatedAt, wantTime) {
+		t.Errorf("CreatedAt = %+v, want %+v", mem.CreatedAt, wantTime)
+	}
+	if !reflect.DeepEqual(mem.UpdatedAt, wantTime) {
+		t.Errorf("UpdatedAt = %+v, want %+v", mem.UpdatedAt, wantTime)
+	}
+}
+
+func TestAutoExtractMemoryLeavesLastAccessZero(t *testing.T) {
+	t.Parallel()
+
+	rt := NewRuntime(WithoutRules(), WithPostApplyHooks(AutoExtractMemory()))
+	world := model.World{
+		ID:   "test_world",
+		Name: "Test World",
+		Clock: model.WorldClock{
+			Current: model.WorldTime{Kind: model.WorldTimeTick, Tick: 10},
+		},
+	}
+	event := model.WorldEvent{
+		ID:          "event_1",
+		Type:        model.EventTypeNote,
+		Source:      model.EventSourceTest,
+		Description: "Something happened",
+		ActorIDs:    []model.EntityID{"char_a"},
+	}
+
+	got, err := rt.ApplyEvent(world, event)
+	if err != nil {
+		t.Fatalf("ApplyEvent returned error: %v", err)
+	}
+	mem := got.Memory[0]
+	if !reflect.DeepEqual(mem.LastAccess, model.WorldTime{}) {
+		t.Errorf("LastAccess = %+v, want zero value", mem.LastAccess)
 	}
 }
 

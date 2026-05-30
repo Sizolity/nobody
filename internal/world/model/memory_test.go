@@ -1,6 +1,9 @@
 package model
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func validMemory() MemoryRecord {
 	return MemoryRecord{
@@ -103,5 +106,31 @@ func TestMemoryValidateAcceptsZeroValueNewFields(t *testing.T) {
 	m := validMemory()
 	if err := m.Validate(); err != nil {
 		t.Fatalf("should accept zero-value new fields: %v", err)
+	}
+}
+
+func TestMemoryValidateAcceptsZeroTimestamps(t *testing.T) {
+	m := validMemory()
+	if err := m.Validate(); err != nil {
+		t.Fatalf("zero-value timestamps should be valid: %v", err)
+	}
+	if !reflect.DeepEqual(m.CreatedAt, WorldTime{}) {
+		t.Fatal("expected zero CreatedAt")
+	}
+	if !reflect.DeepEqual(m.UpdatedAt, WorldTime{}) {
+		t.Fatal("expected zero UpdatedAt")
+	}
+	if !reflect.DeepEqual(m.LastAccess, WorldTime{}) {
+		t.Fatal("expected zero LastAccess")
+	}
+}
+
+func TestMemoryValidateAcceptsPopulatedTimestamps(t *testing.T) {
+	m := validMemory()
+	m.CreatedAt = WorldTime{Kind: WorldTimeTick, Tick: 5}
+	m.UpdatedAt = WorldTime{Kind: WorldTimeTick, Tick: 10}
+	m.LastAccess = WorldTime{Kind: WorldTimeTick, Tick: 12}
+	if err := m.Validate(); err != nil {
+		t.Fatalf("populated timestamps should be valid: %v", err)
 	}
 }

@@ -2,6 +2,7 @@ package model
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -44,6 +45,63 @@ func TestWorldEventValidateRequiresCoreFields(t *testing.T) {
 	event = WorldEvent{ID: "event_1", Type: EventTypeNote}
 	if err := event.Validate(); err == nil {
 		t.Fatal("Validate returned nil without Source")
+	}
+}
+
+func TestWorldEventValidateAcceptsSupportedStatuses(t *testing.T) {
+	t.Parallel()
+
+	for _, status := range []string{
+		EventStatusProposed,
+		EventStatusValidated,
+		EventStatusApplied,
+		EventStatusRejected,
+		EventStatusRolledBack,
+		EventStatusSuperseded,
+	} {
+		event := WorldEvent{
+			ID:     "event_1",
+			Type:   EventTypeNote,
+			Source: EventSourceTest,
+			Status: status,
+		}
+		if err := event.Validate(); err != nil {
+			t.Fatalf("Validate returned error for status %q: %v", status, err)
+		}
+	}
+}
+
+func TestWorldEventValidateRejectsUnsupportedStatus(t *testing.T) {
+	t.Parallel()
+
+	event := WorldEvent{
+		ID:     "event_1",
+		Type:   EventTypeNote,
+		Source: EventSourceTest,
+		Status: "pending",
+	}
+	if err := event.Validate(); err == nil {
+		t.Fatal("Validate returned nil for unsupported status")
+	} else if !strings.Contains(err.Error(), "unsupported event status") {
+		t.Fatalf("Validate error = %q, want unsupported event status", err.Error())
+	}
+}
+
+func TestWorldEventValidateValidatesPreconditions(t *testing.T) {
+	t.Parallel()
+
+	event := WorldEvent{
+		ID:     "event_1",
+		Type:   EventTypeNote,
+		Source: EventSourceTest,
+		Preconditions: []Condition{{
+			Kind: ConditionKindState,
+		}},
+	}
+	if err := event.Validate(); err == nil {
+		t.Fatal("Validate returned nil for invalid precondition")
+	} else if !strings.Contains(err.Error(), "event.preconditions[0]") {
+		t.Fatalf("Validate error = %q, want precondition index", err.Error())
 	}
 }
 
