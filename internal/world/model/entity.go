@@ -521,14 +521,14 @@ func valueMap(value any) map[string]Value {
 	case map[string]Value:
 		out := make(map[string]Value, len(typed))
 		for key, value := range typed {
-			out[key] = cloneComponentValue(value)
+			out[key] = value.Clone()
 		}
 		return out
 	case map[string]any:
 		out := make(map[string]Value, len(typed))
 		for key, value := range typed {
 			if typedValue, ok := value.(Value); ok {
-				out[key] = cloneComponentValue(typedValue)
+				out[key] = typedValue.Clone()
 				continue
 			}
 			if typedValue, ok := valueFromObject(value); ok {
@@ -549,7 +549,7 @@ func valueFromObject(value any) (Value, bool) {
 	kind, _ := data["kind"].(string)
 	out := Value{
 		Kind: kind,
-		Raw:  cloneComponentAny(data["raw"]),
+		Raw:  cloneAny(data["raw"]),
 	}
 	if unit, ok := data["unit"].(string); ok {
 		out.Unit = unit
@@ -558,32 +558,6 @@ func valueFromObject(value any) (Value, bool) {
 		out.Source = source
 	}
 	return out, true
-}
-
-func cloneComponentValue(value Value) Value {
-	value.Raw = cloneComponentAny(value.Raw)
-	return value
-}
-
-func cloneComponentAny(value any) any {
-	switch typed := value.(type) {
-	case map[string]any:
-		out := make(map[string]any, len(typed))
-		for key, value := range typed {
-			out[key] = cloneComponentAny(value)
-		}
-		return out
-	case []any:
-		out := make([]any, len(typed))
-		for i, value := range typed {
-			out[i] = cloneComponentAny(value)
-		}
-		return out
-	case []string:
-		return append([]string(nil), typed...)
-	default:
-		return typed
-	}
 }
 
 func NewProfileComponent(name, description string) map[string]any {

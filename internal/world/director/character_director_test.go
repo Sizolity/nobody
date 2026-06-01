@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/sizolity/nobody/internal/world/model"
+	"github.com/sizolity/nobody/internal/world/view"
 )
 
 type mockGenerator struct {
@@ -457,7 +458,11 @@ func TestBuildCharacterPromptIncludesContext(t *testing.T) {
 		}},
 	}
 
-	prompt := buildCharacterPrompt(alice, world)
+	cc, err := view.CharacterContextView{}.Render(world, view.CharacterContextRequest{PerspectiveID: alice.ID})
+	if err != nil {
+		t.Fatalf("Render returned error: %v", err)
+	}
+	prompt := buildCharacterPrompt(cc)
 
 	var parsed characterPromptContext
 	if err := json.Unmarshal([]byte(prompt), &parsed); err != nil {
@@ -482,14 +487,127 @@ func TestBuildCharacterPromptIncludesContext(t *testing.T) {
 	if len(parsed.NearbyEntities) != 1 || parsed.NearbyEntities[0].Name != "Bob" {
 		t.Errorf("nearby = %+v, want [Bob]", parsed.NearbyEntities)
 	}
-	if len(parsed.Memories) != 1 || !strings.Contains(parsed.Memories[0].Content, "hidden cave") {
-		t.Errorf("memories = %+v, want Alice's memory only", parsed.Memories)
+	// Memories now sourced via view: Alice's own rumor + the public world memory
+	// (TruthStatusTrue, owner=world) both pass the visibility filter. Bob's
+	// private memory is owner-mismatched and excluded.
+	if len(parsed.Memories) != 2 {
+		t.Fatalf("memories = %+v, want 2 visible memories (Alice's rumor + world public fact)", parsed.Memories)
+	}
+	var foundCave, foundWar bool
+	for _, m := range parsed.Memories {
+		if strings.Contains(m.Content, "hidden cave") {
+			foundCave = true
+		}
+		if strings.Contains(m.Content, "kingdom is at war") {
+			foundWar = true
+		}
+	}
+	if !foundCave || !foundWar {
+		t.Errorf("memories missing expected entries (cave=%v, war=%v): %+v", foundCave, foundWar, parsed.Memories)
 	}
 	if len(parsed.Relations) != 1 || parsed.Relations[0].Type != "ally" {
 		t.Errorf("relations = %+v", parsed.Relations)
 	}
 	if len(parsed.ActiveThreads) != 1 || parsed.ActiveThreads[0].Title != "Find the treasure" {
 		t.Errorf("threads = %+v", parsed.ActiveThreads)
+	}
+}
+
+// TestCharacterDirectorPromptRespectsVisibility verifies that CharacterDirector
+// only exposes visibility-filtered state to the LLM. Memories marked secret
+// and relations with private visibility excluding the actor must NOT appear
+// in the prompt, even when they involve the actor as owner/source/target.
+// Threads where the actor is a participant are intentionally exempt from
+// Visibility (per view.visibleThreads contract: being a participant implies
+// awareness); a separate test pins the non-participant case.
+func TestCharacterDirectorPromptRespectsVisibility(t *testing.T) {
+	t.Parallel()
+
+	gen := &capturingCharacterGenerator{response: "[]"}
+	d := NewCharacterDirector("cd_1", CharacterDirectorConfig{Generator: gen})
+
+	world := model.World{
+		ID:   "test_world",
+		Name: "Test",
+		Entities: map[model.EntityID]model.Entity{
+			"char_alice": actorEntity("char_alice", "Alice", nil),
+			"char_bob": {
+				ID: "char_bob", Type: "character", Name: "Bob",
+			},
+		},
+		Memory: []model.MemoryRecord{
+			{
+				ID:      "mem_secret",
+				Owner:   model.MemoryOwner{Kind: model.MemoryOwnerKindCharacter, ID: "char_alice"},
+				Content: "TOP_SECRET_PAYLOAD_DO_NOT_LEAK",
+				Visibility: &model.Visibility{
+					Mode: model.VisibilitySecret,
+				},
+			},
+			{
+				ID:      "mem_visible",
+				Owner:   model.MemoryOwner{Kind: model.MemoryOwnerKindCharacter, ID: "char_alice"},
+				Content: "PUBLIC_VISIBLE_PAYLOAD",
+			},
+		},
+		Relations: []model.Relation{
+			{
+				ID: "rel_hidden", Type: "secret_pact",
+				SourceID: "char_alice", TargetID: "char_bob",
+				Visibility: &model.Visibility{
+					Mode:      model.VisibilityPrivate,
+					EntityIDs: []model.EntityID{"char_bob"},
+				},
+			},
+		},
+	}
+
+	_, err := d.Propose(Context{Ctx: context.Background(), World: world})
+	if err != nil {
+		t.Fatalf("Propose returned error: %v", err)
+	}
+
+	if gen.lastUser == "" {
+		t.Fatal("user prompt is empty")
+	}
+	if strings.Contains(gen.lastUser, "TOP_SECRET_PAYLOAD_DO_NOT_LEAK") {
+		t.Errorf("prompt leaked secret memory: %s", gen.lastUser)
+	}
+	if strings.Contains(gen.lastUser, "secret_pact") {
+		t.Errorf("prompt leaked private relation type: %s", gen.lastUser)
+	}
+	if !strings.Contains(gen.lastUser, "PUBLIC_VISIBLE_PAYLOAD") {
+		t.Errorf("prompt missing visible memory: %s", gen.lastUser)
+	}
+}
+
+func TestCharacterDirectorPromptHidesNonParticipantHiddenThread(t *testing.T) {
+	t.Parallel()
+
+	gen := &capturingCharacterGenerator{response: "[]"}
+	d := NewCharacterDirector("cd_1", CharacterDirectorConfig{Generator: gen})
+
+	world := model.World{
+		ID:   "test_world",
+		Name: "Test",
+		Entities: map[model.EntityID]model.Entity{
+			"char_alice": actorEntity("char_alice", "Alice", nil),
+			"char_bob":   {ID: "char_bob", Type: "character", Name: "Bob"},
+		},
+		// Alice is NOT a participant; thread is gm_only → should be hidden.
+		Threads: []model.WorldThread{{
+			ID: "thread_gm", Title: "GM_ONLY_HIDDEN_FROM_ALICE", Status: model.ThreadStatusOpen,
+			Kind:           model.ThreadKindMystery,
+			ParticipantIDs: []model.EntityID{"char_bob"},
+			Visibility:     &model.Visibility{Mode: model.VisibilityGMOnly},
+		}},
+	}
+
+	if _, err := d.Propose(Context{Ctx: context.Background(), World: world}); err != nil {
+		t.Fatalf("Propose returned error: %v", err)
+	}
+	if strings.Contains(gen.lastUser, "GM_ONLY_HIDDEN_FROM_ALICE") {
+		t.Errorf("prompt leaked gm_only thread Alice is not a participant of: %s", gen.lastUser)
 	}
 }
 

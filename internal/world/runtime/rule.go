@@ -94,6 +94,21 @@ func (d RuleDecision) Validate() error {
 	}
 }
 
+// RuleRejectedError is returned by evaluateRules when a rule emits a
+// RuleDecisionReject. Step() uses errors.As to classify the rejection as a
+// domain decision instead of a programmer error.
+type RuleRejectedError struct {
+	RuleID model.RuleID
+	Reason string
+}
+
+func (e *RuleRejectedError) Error() string {
+	if e.Reason == "" {
+		return fmt.Sprintf("rule %q rejected event", e.RuleID)
+	}
+	return fmt.Sprintf("rule %q rejected event: %s", e.RuleID, e.Reason)
+}
+
 type RequireCheckError struct {
 	RuleID      model.RuleID
 	Description string

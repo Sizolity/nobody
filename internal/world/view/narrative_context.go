@@ -27,22 +27,22 @@ func (v NarrativeView) Render(w model.World, req NarrativeContextRequest) Narrat
 			ID:          w.ID,
 			Name:        w.Name,
 			Description: w.Description,
-			Canon:       cloneCanon(w.Canon),
-			Clock:       cloneWorldClock(w.Clock),
-			Metadata:    cloneWorldMetadata(w.Metadata),
+			Canon:       w.Canon.Clone(),
+			Clock:       w.Clock.Clone(),
+			Metadata:    w.Metadata.Clone(),
 		},
 		RecentEvents:   recentEvents(w.EventLog, req.RecentEventLimit),
 		ActiveThreads:  activeThreads(w.Threads),
-		Facts:          cloneFacts(w.Facts),
+		Facts:          cloneFactSlice(w.Facts),
 		PublicMemories: publicWorldMemories(w.Memory),
 	}
 }
 
 func recentEvents(events []model.WorldEvent, limit int) []model.WorldEvent {
 	if limit <= 0 || limit >= len(events) {
-		return cloneEvents(events)
+		return cloneEventSlice(events)
 	}
-	return cloneEvents(events[len(events)-limit:])
+	return cloneEventSlice(events[len(events)-limit:])
 }
 
 func activeThreads(threads []model.WorldThread) []model.WorldThread {
@@ -53,7 +53,7 @@ func activeThreads(threads []model.WorldThread) []model.WorldThread {
 			out = append(out, thread)
 		}
 	}
-	return nonNilClone(out)
+	return cloneThreadSlice(out)
 }
 
 func publicWorldMemories(memories []model.MemoryRecord) []model.MemoryRecord {
@@ -63,5 +63,5 @@ func publicWorldMemories(memories []model.MemoryRecord) []model.MemoryRecord {
 			out = append(out, memory)
 		}
 	}
-	return cloneMemories(out)
+	return cloneMemorySlice(out)
 }

@@ -28,34 +28,55 @@ type ConversationGenerator interface {
 
 // DefaultSystemPrompt documents the WorldEvent schema for LLM generators.
 // Used when LLMDirectorConfig.SystemPrompt is empty.
+//
+// CRITICAL: the payload keys listed here MUST exactly match the keys read
+// by the effect handlers in internal/world/runtime/runtime.go. The
+// TestDefaultSystemPromptKeysMatchRuntimeHandlers test (in package
+// runtime) pins this contract — if you rename a handler payload key,
+// update both this prompt and that test in the same change.
 const DefaultSystemPrompt = `You are a world director for a narrative simulation engine.
 Given the current world state as JSON, propose one or more world events as a JSON array.
 
 Each event MUST have:
 - "id": unique snake_case identifier (e.g. "event_merchant_arrives")
-- "type": one of "note", "world_fact_changed", "remember", "move", "thread_changed"
+- "type": one of "note", "world_fact_changed", "remember", "move", "thread_changed", "relationship_changed", "inventory_changed", "stats_changed", "actor_changed"
 - "source": always "director"
 - "description": one-sentence narrative description
 
 Events MAY include "effects" to mutate world state. Each effect has:
 - "kind": the mutation type
-- "target_id": the target entity/fact/memory/thread ID
-- "payload": key-value pairs where values are {"kind":"string|number|boolean|entity_ref","raw":<value>}
+- "target_id": the target entity/fact/memory/thread/relation/event ID (always required, even for kinds that read no payload keys)
+- "payload": key-value pairs where values are {"kind":"string|number|boolean|entity_ref|object","raw":<value>}
 
-Supported effect kinds:
-- "set_fact": payload needs "subject_id" (entity_ref), "predicate" (string), "value" (any)
-- "update_entity_state": target_id is entity, payload keys become state entries
-- "add_memory": target_id is new memory ID, payload needs "owner_kind" (string: "world"|"character"), "owner_id" (string, if character), "scope" (string: "factual"|"subjective"), "memory_kind" (string: "observation"|"belief"|"rumor"), "content" (string), "truth_status" (string: "true"|"unknown"|"disputed"|"secret")
-- "open_thread": target_id is new thread ID, payload needs "title" (string), "kind" (string: "mystery"|"quest"|"conflict"|"theme")
-- "close_thread": target_id is existing thread ID
-- "add_relation": target_id is new relation ID, payload needs "type" (string), "source_id" (entity_ref), "relation_target_id" (entity_ref)
-- "add_entity": target_id is new entity ID, payload needs "type" (string: "character"|"location"|"item"), "name" (string)
+Supported effect kinds (payload keys listed are EXACTLY the keys the runtime reads):
+- "set_fact": target_id is new fact ID. payload needs "subject_id" (entity_ref), "predicate" (string), "value" (any).
+- "update_entity_state": target_id is existing entity ID. payload keys become state entries (each value typed as string/number/boolean/entity_ref).
+- "set_entity_component": target_id is existing entity ID. payload needs "component" (string: "profile"|"actor"|"spatial"|"inventory"|"stats"|"skill"|"faction"|"lifecycle"|"dialogue") and "data" (object matching that component's shape).
+- "add_relation": target_id is new relation ID. payload needs "type" (string), "source_id" (entity_ref), "target_id" (entity_ref).
+- "remove_relation": target_id is existing relation ID. payload is empty.
+- "add_memory": target_id is new memory ID. payload needs "owner_kind" (string: "world"|"character"|"faction"|"narrator") and "content" (string). Optional: "owner_id" (string; required unless owner_kind is "world"), "scope" (string: "canonical"|"factual"|"subjective"|"rumor"|"emotional"|"procedural"), "kind" (string: "observation"|"belief"|"rumor"|"summary"), "truth_status" (string: "true"|"false"|"unknown"|"disputed"|"outdated"|"secret"), "confidence" (number 0-1), "importance" (number 0-1).
+- "revise_memory": target_id is existing memory ID. all keys optional: "content" (string), "summary" (string), "truth_status" (string), "confidence" (number 0-1), "importance" (number 0-1).
+- "reconcile_memory": target_id is existing memory ID. all keys optional: "content" (string), "summary" (string), "truth_status" (string), "confidence_delta" (number, added to current confidence then clamped to 0-1), plus optional fork into a new belief memory via "add_memory_id" (string) and "add_memory_content" (string), with optional "add_memory_truth_status" (string), "add_memory_confidence" (number 0-1), "add_memory_importance" (number 0-1).
+- "remove_memory": target_id is existing memory ID. payload is empty.
+- "remove_fact": target_id is existing fact ID. payload is empty.
+- "enqueue_event": target_id is a label for the queued event. payload needs "event" (object: a full nested WorldEvent). Optional: "priority" (number), "created_by" (string), "not_before" (object: WorldTime).
+- "open_thread": target_id is new thread ID. payload needs "kind" (string: "mystery"|"quest"|"conflict"|"theme") and "title" (string). Optional: "summary" (string), "status" (string), "priority" (number), "tension" (number).
+- "update_thread": target_id is existing thread ID. all keys optional: "kind", "title", "summary", "status" (strings), "priority", "tension" (numbers).
+- "close_thread": target_id is existing thread ID. same optional keys as update_thread; if "status" is omitted it defaults to "resolved".
+- "add_entity": target_id is new entity ID. payload needs "type" (string: "character"|"location"|"item"|other) and "name" (string). Optional: "description" (string).
+- "remove_entity": target_id is existing entity ID. payload is empty.
 
 A simple narrative event with no world mutation:
 [{"id":"event_dawn","type":"note","source":"director","description":"Dawn breaks."}]
 
 An event that also sets a world fact:
 [{"id":"event_gate_sealed","type":"world_fact_changed","source":"director","description":"The city gate is sealed.","effects":[{"kind":"set_fact","target_id":"fact_gate","payload":{"subject_id":{"kind":"entity_ref","raw":"city_gate"},"predicate":{"kind":"string","raw":"status"},"value":{"kind":"string","raw":"sealed"}}}]}]
+
+An event that adds a memory (the memory kind is under the payload key "kind"):
+[{"id":"event_alice_suspects","type":"remember","source":"director","description":"Alice now suspects Bob.","effects":[{"kind":"add_memory","target_id":"mem_alice_suspect_bob","payload":{"owner_kind":{"kind":"string","raw":"character"},"owner_id":{"kind":"string","raw":"char_alice"},"scope":{"kind":"string","raw":"subjective"},"kind":{"kind":"string","raw":"belief"},"content":{"kind":"string","raw":"Bob looked guilty."},"truth_status":{"kind":"string","raw":"unknown"}}}]}]
+
+An event that adds a relation (the relation target is under the payload key "target_id"):
+[{"id":"event_alice_allies_bob","type":"relationship_changed","source":"director","description":"Alice allies with Bob.","effects":[{"kind":"add_relation","target_id":"rel_alice_bob","payload":{"type":{"kind":"string","raw":"ally"},"source_id":{"kind":"entity_ref","raw":"char_alice"},"target_id":{"kind":"entity_ref","raw":"char_bob"}}}]}]
 
 Return ONLY a valid JSON array. No markdown, no explanation.`
 

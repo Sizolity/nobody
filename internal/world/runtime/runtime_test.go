@@ -335,7 +335,7 @@ func TestRuntimeApplyEventReportsUnsupportedPreconditionOperator(t *testing.T) {
 	if err == nil {
 		t.Fatal("ApplyEvent returned nil for unsupported precondition operator")
 	}
-	if !strings.Contains(err.Error(), `unsupported state precondition operator ">"`) {
+	if !strings.Contains(err.Error(), `unsupported condition operator ">"`) {
 		t.Fatalf("ApplyEvent error = %q, want unsupported operator", err.Error())
 	}
 }
@@ -1395,5 +1395,72 @@ func TestRuntimeApplyEventDoesNotMutateInputWorldWhenLaterEffectFails(t *testing
 	}
 	if _, ok := world.Entities["door_1"].State["locked"]; ok {
 		t.Fatalf("input world was mutated after failed event: %#v", world.Entities["door_1"].State)
+	}
+}
+
+func TestApplyEventBlockedByMemoryPrecondition(t *testing.T) {
+	t.Parallel()
+
+	world := model.World{ID: "test_world", Name: "Test World"}
+	event := model.WorldEvent{
+		ID:     "event_1",
+		Type:   model.EventTypeNote,
+		Source: model.EventSourceTest,
+		Preconditions: []model.Condition{{
+			Kind:     model.ConditionKindMemory,
+			Path:     "mem_alice_evidence",
+			Operator: model.ConditionOperatorExists,
+		}},
+	}
+
+	_, err := NewRuntime(WithoutRules()).ApplyEvent(world, event)
+	if err == nil {
+		t.Fatal("ApplyEvent returned nil for failed memory precondition")
+	}
+	if !strings.Contains(err.Error(), "precondition") {
+		t.Fatalf("ApplyEvent error = %q, want precondition-related", err.Error())
+	}
+	if !strings.Contains(err.Error(), "failed") {
+		t.Fatalf("ApplyEvent error = %q, want 'failed' marker", err.Error())
+	}
+}
+
+func TestApplyEventStatPreconditionEqual(t *testing.T) {
+	t.Parallel()
+
+	world := model.World{
+		ID:   "test_world",
+		Name: "Test World",
+		Entities: map[model.EntityID]model.Entity{
+			"char_alice": {
+				ID:   "char_alice",
+				Type: "character",
+				Name: "Alice",
+				Components: map[string]any{
+					model.ComponentStats: model.NewStatsComponent(map[string]model.Value{
+						"hp": {Kind: model.ValueKindNumber, Raw: float64(100)},
+					}),
+				},
+			},
+		},
+	}
+	event := model.WorldEvent{
+		ID:     "event_1",
+		Type:   model.EventTypeNote,
+		Source: model.EventSourceTest,
+		Preconditions: []model.Condition{{
+			Kind:     model.ConditionKindStat,
+			Path:     "char_alice.hp",
+			Operator: model.ConditionOperatorEqual,
+			Value:    model.Value{Kind: model.ValueKindNumber, Raw: float64(100)},
+		}},
+	}
+
+	got, err := NewRuntime(WithoutRules()).ApplyEvent(world, event)
+	if err != nil {
+		t.Fatalf("ApplyEvent returned error: %v", err)
+	}
+	if len(got.EventLog) != 1 {
+		t.Fatalf("EventLog length = %d, want 1", len(got.EventLog))
 	}
 }

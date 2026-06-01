@@ -166,7 +166,7 @@ func TestThreadWithAllSubstructuresValidates(t *testing.T) {
 		DesiredState: []Condition{{
 			Kind:     ConditionKindFact,
 			Path:     "facts.case.solved",
-			Operator: "eq",
+			Operator: ConditionOperatorEqual,
 			Value:    Value{Kind: ValueKindBoolean, Raw: true},
 		}},
 	}}

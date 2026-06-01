@@ -44,7 +44,7 @@ This is what keeps `nobody` closer to a story system than a plain database state
 
 This allows the engine to represent misunderstanding, lies, hidden truths, rumors, outdated knowledge, and investigation. Memory is therefore not only persistence; it is one of the engines that creates new story pressure.
 
-**[T2]** The runtime should never treat memory as one shared omniscient context for all characters. Retrieval must be owner-aware: a character context can include that character's private memories, public knowledge, and visible facts, but not hidden world or narrator truth unless an event has revealed it.
+**[T1]** The runtime should never treat memory as one shared omniscient context for all characters. Retrieval must be owner-aware: a character context can include that character's private memories, public knowledge, and visible facts, but not hidden world or narrator truth unless an event has revealed it. (Implemented: `CharacterContextView` filters by `Visibility` axis; `CharacterDirector` builds its LLM prompt from the view, not from raw `World` state.)
 
 Example:
 
@@ -107,10 +107,12 @@ Rule actions can include:
 [T1] reject_event
 [T1] modify_event
 [T1] add_effect
-[T2] require_check
+[T1] require_check
 [T1] enqueue_event
-[T2] raise_conflict
+[T1] raise_conflict
 ```
+
+**[T1]** `require_check` and `raise_conflict` are fail-soft: `Runtime.Step` classifies them into `StepResult.BlockedEvents` and `StepResult.Conflicts` and continues, instead of aborting the step. Rule-modified events and rule-added effects are re-validated against `WorldEvent.Validate` before they are accepted.
 
 **[T1]** The first implementation should prefer Go interfaces over a full rules DSL. A serializable DSL can come later after repeated rule shapes are clear.
 
@@ -202,14 +204,26 @@ Conceptual flow:
 [T1] Input / Director Proposal
   -> [T1] Candidate Events
   -> [T1] Rule Validation
-  -> [T2] Conflict Resolution
-  -> [T2] Event Scheduling
+  -> [T2] Conflict Resolution         (raise_conflict surfaced via StepResult.Conflicts; true cross-proposal resolution still T2)
+  -> [T2] Event Scheduling            (single-proposal queue ordering is T1; multi-proposal arbitration still T2)
   -> [T1] Effect Application
   -> [T1] Memory Extraction
   -> [T1] Thread Update
   -> [T1] View Rendering
   -> [T1] Persisted World State And Logs
 ```
+
+**[T1]** `Step()` is fail-soft on rule decisions and returns structured outputs:
+
+```text
+StepResult.AppliedEvents    successfully applied events
+StepResult.SkippedEvents    skip-policy queue items
+StepResult.RejectedEvents   RuleDecisionReject       (event + rule_id + reason)
+StepResult.BlockedEvents    RuleDecisionRequireCheck (event + rule_id + description)
+StepResult.Conflicts        RuleDecisionRaiseConflict (event + rule_id + RuleConflict)
+```
+
+Programmer errors (validation failure, payload errors, registry errors, effect-application errors) still abort `Step()`. Queue items that hit a domain rule decision are removed from the queue (definitive decision); queue items that hit a fail-policy error path leave the queue snapshot restored.
 
 Conceptual runtime:
 

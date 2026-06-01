@@ -15,6 +15,7 @@ type CharacterContextRequest struct {
 
 type CharacterContext struct {
 	Perspective    model.Entity
+	Location       *model.Entity // Resolved spatial location of Perspective; nil if no spatial component or location entity is missing.
 	Memories       []model.MemoryRecord
 	Relations      []model.Relation
 	Facts          []model.Fact
@@ -42,15 +43,37 @@ func (v CharacterContextView) Render(world model.World, req CharacterContextRequ
 		maxEvents = defaultMaxEvents
 	}
 
+	// Every projection is deep-cloned so that downstream product layers
+	// cannot drift the runtime's World by mutating returned data. This is
+	// the view-side half of the "single mutation entry" invariant: the
+	// runtime guarantees nothing else mutates `World`, and the view
+	// guarantees its outputs never alias the source `World`.
 	return CharacterContext{
-		Perspective:    perspective,
-		Memories:       visibleMemories(world, req.PerspectiveID),
-		Relations:      visibleRelations(world, req.PerspectiveID),
-		Facts:          visibleFacts(world, req.PerspectiveID),
-		Threads:        visibleThreads(world, req.PerspectiveID),
-		NearbyEntities: nearbyEntities(world, req.PerspectiveID),
-		RecentEvents:   visibleRecentEvents(world, req.PerspectiveID, maxEvents),
+		Perspective:    perspective.Clone(),
+		Location:       resolveLocation(world, perspective),
+		Memories:       cloneMemorySlice(visibleMemories(world, req.PerspectiveID)),
+		Relations:      cloneRelationSlice(visibleRelations(world, req.PerspectiveID)),
+		Facts:          cloneFactSlice(visibleFacts(world, req.PerspectiveID)),
+		Threads:        cloneThreadSlice(visibleThreads(world, req.PerspectiveID)),
+		NearbyEntities: cloneEntitySlice(nearbyEntities(world, req.PerspectiveID)),
+		RecentEvents:   cloneEventSlice(visibleRecentEvents(world, req.PerspectiveID, maxEvents)),
 	}, nil
+}
+
+// resolveLocation returns a cloned copy of the entity referenced by the
+// perspective's SpatialComponent.LocationID, or nil if the entity has no
+// spatial component or the referenced location entity is missing.
+func resolveLocation(world model.World, perspective model.Entity) *model.Entity {
+	sc, ok := perspective.SpatialComponent()
+	if !ok || sc.LocationID == "" {
+		return nil
+	}
+	loc, ok := world.Entities[sc.LocationID]
+	if !ok {
+		return nil
+	}
+	clone := loc.Clone()
+	return &clone
 }
 
 // VisibleMemoriesForCharacter is the legacy API kept for backward compatibility.

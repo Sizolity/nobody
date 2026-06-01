@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -25,6 +26,84 @@ type StepResult struct {
 	Proposals     []model.WorldEvent `json:"proposals"`
 	AppliedEvents []model.WorldEvent `json:"applied_events"`
 	SkippedEvents []model.WorldEvent `json:"skipped_events,omitempty"`
+
+	// RejectedEvents records events that a rule declined to apply
+	// (RuleDecisionReject). The event is not applied to the world and does
+	// not appear in AppliedEvents; Step() continues with subsequent items.
+	RejectedEvents []RejectedEvent `json:"rejected_events,omitempty"`
+
+	// BlockedEvents records events a rule flagged for external review
+	// (RuleDecisionRequireCheck). Same persistence semantics as
+	// RejectedEvents: not applied, not in AppliedEvents, Step() continues.
+	BlockedEvents []BlockedEvent `json:"blocked_events,omitempty"`
+
+	// Conflicts records events a rule flagged as conflicting with existing
+	// world state (RuleDecisionRaiseConflict). Same persistence semantics.
+	Conflicts []EventConflict `json:"conflicts,omitempty"`
+}
+
+// RejectedEvent records an event that a rule declined to apply.
+//
+// The Event field holds the event as proposed by its director (or as it
+// existed in the queue) — not the post-modify intermediate state, because
+// RuleRejectedError does not carry the rule-mutated event payload.
+type RejectedEvent struct {
+	Event  model.WorldEvent `json:"event"`
+	RuleID model.RuleID     `json:"rule_id"`
+	Reason string           `json:"reason,omitempty"`
+}
+
+// BlockedEvent records an event that requires external review per a rule's
+// RuleDecisionRequireCheck. See RejectedEvent for the Event field semantics.
+type BlockedEvent struct {
+	Event       model.WorldEvent `json:"event"`
+	RuleID      model.RuleID     `json:"rule_id"`
+	Description string           `json:"description"`
+}
+
+// EventConflict records an event a rule flagged as conflicting with
+// existing world state per RuleDecisionRaiseConflict. See RejectedEvent for
+// the Event field semantics.
+type EventConflict struct {
+	Event    model.WorldEvent `json:"event"`
+	RuleID   model.RuleID     `json:"rule_id"`
+	Conflict RuleConflict     `json:"conflict"`
+}
+
+// classifyRuleError appends the appropriate structured record to result when
+// err is one of the rule-decision errors (RuleRejectedError,
+// RequireCheckError, RaiseConflictError) and returns true. For any other
+// error (validation, payload, effect-application, registry, panics) it
+// returns false so the caller can apply its normal error handling.
+func classifyRuleError(result *StepResult, event model.WorldEvent, err error) bool {
+	var rejErr *RuleRejectedError
+	if errors.As(err, &rejErr) {
+		result.RejectedEvents = append(result.RejectedEvents, RejectedEvent{
+			Event:  event,
+			RuleID: rejErr.RuleID,
+			Reason: rejErr.Reason,
+		})
+		return true
+	}
+	var checkErr *RequireCheckError
+	if errors.As(err, &checkErr) {
+		result.BlockedEvents = append(result.BlockedEvents, BlockedEvent{
+			Event:       event,
+			RuleID:      checkErr.RuleID,
+			Description: checkErr.Description,
+		})
+		return true
+	}
+	var conflictErr *RaiseConflictError
+	if errors.As(err, &conflictErr) {
+		result.Conflicts = append(result.Conflicts, EventConflict{
+			Event:    event,
+			RuleID:   conflictErr.RuleID,
+			Conflict: conflictErr.Conflict,
+		})
+		return true
+	}
+	return false
 }
 
 func (r Runtime) Step(ctx context.Context, world model.World) (StepResult, error) {
@@ -35,7 +114,7 @@ func (r Runtime) Step(ctx context.Context, world model.World) (StepResult, error
 		SkippedEvents: []model.WorldEvent{},
 	}
 	for _, d := range r.Directors {
-		proposals, err := d.Propose(director.Context{Ctx: ctx, World: cloneWorldForMutation(result.World)})
+		proposals, err := d.Propose(director.Context{Ctx: ctx, World: result.World.Clone()})
 		if err != nil {
 			return result, fmt.Errorf("director %q: %w", d.ID(), err)
 		}
@@ -44,6 +123,12 @@ func (r Runtime) Step(ctx context.Context, world model.World) (StepResult, error
 	for i, proposal := range result.Proposals {
 		next, err := r.ApplyEvent(result.World, proposal)
 		if err != nil {
+			// Rule decisions (reject / require_check / raise_conflict) are
+			// domain outcomes, not programmer errors: record them on the
+			// StepResult and continue with the remaining proposals.
+			if classifyRuleError(&result, proposal, err) {
+				continue
+			}
 			return result, fmt.Errorf("proposal %d: %w", i, err)
 		}
 		applied := latestAppliedEvent(next)
@@ -57,9 +142,22 @@ func (r Runtime) Step(ctx context.Context, world model.World) (StepResult, error
 			break
 		}
 		item := result.World.EventQueue[queueIndex]
+		// Snapshot the queue header before removal so the default fail policy
+		// can restore the original queue (preserving order, priority, NotBefore,
+		// attempts) when it aborts the step. Skip/Retry policies do not need
+		// the snapshot because they consume or re-append the item themselves.
+		queueBeforeRemove := result.World.EventQueue
 		result.World.EventQueue = removeQueueItem(result.World.EventQueue, queueIndex)
 		next, err := r.ApplyEvent(result.World, item.Event)
 		if err != nil {
+			// Rule decisions are domain outcomes, not policy-eligible
+			// errors: classify them and drop the item from the queue
+			// regardless of ErrorPolicy. Only "real" errors (validation,
+			// effect-application, registry, payload) fall through to
+			// ErrorPolicy dispatch.
+			if classifyRuleError(&result, item.Event, err) {
+				continue
+			}
 			switch item.ErrorPolicy {
 			case model.QueueErrorPolicySkip:
 				result.SkippedEvents = append(result.SkippedEvents, item.Event)
@@ -74,6 +172,7 @@ func (r Runtime) Step(ctx context.Context, world model.World) (StepResult, error
 				result.World.EventQueue = append(result.World.EventQueue, item)
 				continue
 			default:
+				result.World.EventQueue = queueBeforeRemove
 				return result, fmt.Errorf("queued event %d: %w", i, err)
 			}
 		}
@@ -117,7 +216,7 @@ func (r Runtime) ApplyEvent(world model.World, event model.WorldEvent) (model.Wo
 		return model.World{}, err
 	}
 	event = evalResult.event
-	world = cloneWorldForMutation(world)
+	world = world.Clone()
 	if err := evaluateEventPreconditions(world, event); err != nil {
 		return world, err
 	}
@@ -156,163 +255,6 @@ func (r Runtime) now() time.Time {
 
 func isZeroWorldTime(value model.WorldTime) bool {
 	return value.Kind == "" && value.Tick == 0 && value.Label == "" && len(value.Calendar) == 0
-}
-
-func cloneWorldForMutation(world model.World) model.World {
-	world.Canon.Genre = slices.Clone(world.Canon.Genre)
-	world.Canon.Tone = slices.Clone(world.Canon.Tone)
-	world.Canon.StyleGuide = slices.Clone(world.Canon.StyleGuide)
-	world.Canon.Laws = slices.Clone(world.Canon.Laws)
-	world.Canon.Boundaries = slices.Clone(world.Canon.Boundaries)
-	world.Canon.Secrets = slices.Clone(world.Canon.Secrets)
-	world.Clock.Current.Calendar = cloneIntMap(world.Clock.Current.Calendar)
-	world.Entities = cloneEntities(world.Entities)
-	world.Relations = slices.Clone(world.Relations)
-	world.Facts = cloneFacts(world.Facts)
-	world.Rules = slices.Clone(world.Rules)
-	world.Threads = slices.Clone(world.Threads)
-	world.EventLog = cloneEvents(world.EventLog)
-	world.EventQueue = cloneEventQueue(world.EventQueue)
-	world.Memory = cloneMemories(world.Memory)
-	world.Metadata.Tags = slices.Clone(world.Metadata.Tags)
-	return world
-}
-
-func cloneEntities(entities map[model.EntityID]model.Entity) map[model.EntityID]model.Entity {
-	if entities == nil {
-		return nil
-	}
-	out := make(map[model.EntityID]model.Entity, len(entities))
-	for id, entity := range entities {
-		entity.Components = cloneAnyMap(entity.Components)
-		entity.State = cloneValueMap(entity.State)
-		entity.Tags = slices.Clone(entity.Tags)
-		out[id] = entity
-	}
-	return out
-}
-
-func cloneFacts(facts []model.Fact) []model.Fact {
-	out := slices.Clone(facts)
-	for i := range out {
-		out[i].Value = cloneValue(out[i].Value)
-	}
-	return out
-}
-
-func cloneMemories(memories []model.MemoryRecord) []model.MemoryRecord {
-	out := slices.Clone(memories)
-	for i := range out {
-		out[i].SubjectIDs = slices.Clone(out[i].SubjectIDs)
-		out[i].EventIDs = slices.Clone(out[i].EventIDs)
-	}
-	return out
-}
-
-func cloneEvents(events []model.WorldEvent) []model.WorldEvent {
-	out := slices.Clone(events)
-	for i := range out {
-		out[i] = cloneEvent(out[i])
-	}
-	return out
-}
-
-func cloneEventQueue(queue []model.EventQueueItem) []model.EventQueueItem {
-	out := slices.Clone(queue)
-	for i := range out {
-		out[i].Event = cloneEvent(out[i].Event)
-		out[i].NotBefore.Calendar = cloneIntMap(out[i].NotBefore.Calendar)
-	}
-	return out
-}
-
-func cloneEvent(event model.WorldEvent) model.WorldEvent {
-	event.ActorIDs = slices.Clone(event.ActorIDs)
-	event.TargetIDs = slices.Clone(event.TargetIDs)
-	event.Preconditions = slices.Clone(event.Preconditions)
-	event.Effects = cloneEffects(event.Effects)
-	event.Causes = slices.Clone(event.Causes)
-	event.Results = slices.Clone(event.Results)
-	event.OccurredAt.Calendar = cloneIntMap(event.OccurredAt.Calendar)
-	event.Metadata = cloneAnyMap(event.Metadata)
-	return event
-}
-
-func cloneEffects(effects []model.Effect) []model.Effect {
-	out := slices.Clone(effects)
-	for i := range out {
-		out[i].Payload = cloneValueMap(out[i].Payload)
-	}
-	return out
-}
-
-func cloneValueMap(in map[string]model.Value) map[string]model.Value {
-	if in == nil {
-		return nil
-	}
-	out := make(map[string]model.Value, len(in))
-	for key, value := range in {
-		out[key] = cloneValue(value)
-	}
-	return out
-}
-
-func cloneValue(value model.Value) model.Value {
-	value.Raw = cloneAny(value.Raw)
-	return value
-}
-
-func cloneAnyMap(in map[string]any) map[string]any {
-	if in == nil {
-		return nil
-	}
-	out := make(map[string]any, len(in))
-	for key, value := range in {
-		out[key] = cloneAny(value)
-	}
-	return out
-}
-
-func cloneIntMap(in map[string]int) map[string]int {
-	if in == nil {
-		return nil
-	}
-	out := make(map[string]int, len(in))
-	for key, value := range in {
-		out[key] = value
-	}
-	return out
-}
-
-func cloneAny(value any) any {
-	switch typed := value.(type) {
-	case map[string]any:
-		return cloneAnyMap(typed)
-	case map[string]string:
-		out := make(map[string]string, len(typed))
-		for key, value := range typed {
-			out[key] = value
-		}
-		return out
-	case map[string]int:
-		return cloneIntMap(typed)
-	case map[string]model.Value:
-		return cloneValueMap(typed)
-	case []any:
-		out := make([]any, len(typed))
-		for i, item := range typed {
-			out[i] = cloneAny(item)
-		}
-		return out
-	case []string:
-		return slices.Clone(typed)
-	case []int:
-		return slices.Clone(typed)
-	case []float64:
-		return slices.Clone(typed)
-	default:
-		return value
-	}
 }
 
 func nextReadyQueueIndexExcluding(world model.World, exclude map[model.EventID]bool) (int, bool) {
@@ -370,7 +312,10 @@ func (r Runtime) evaluateRules(world model.World, event model.WorldEvent) (ruleE
 	ctx := RuleContext{World: world}
 	result := ruleEvalResult{event: event}
 
-	allRules := r.collectRules(world)
+	allRules, err := r.collectRules(world)
+	if err != nil {
+		return ruleEvalResult{}, fmt.Errorf("collect rules: %w", err)
+	}
 
 	for _, rule := range allRules {
 		decision := rule.Evaluate(ctx, result.event)
@@ -381,10 +326,7 @@ func (r Runtime) evaluateRules(world model.World, event model.WorldEvent) (ruleE
 		case RuleDecisionAllow:
 			continue
 		case RuleDecisionReject:
-			if decision.Reason == "" {
-				return ruleEvalResult{}, fmt.Errorf("rule %q rejected event", rule.ID())
-			}
-			return ruleEvalResult{}, fmt.Errorf("rule %q rejected event: %s", rule.ID(), decision.Reason)
+			return ruleEvalResult{}, &RuleRejectedError{RuleID: rule.ID(), Reason: decision.Reason}
 		case RuleDecisionModify:
 			result.event = *decision.ModifiedEvent
 		case RuleDecisionAddEffect:
@@ -405,19 +347,33 @@ func (r Runtime) evaluateRules(world model.World, event model.WorldEvent) (ruleE
 			}
 		}
 	}
+
+	// Re-validate the (possibly rule-mutated) event before it leaves the rule
+	// pipeline. WorldEvent.Validate also walks Effects, so effects appended via
+	// RuleDecisionAddEffect are covered here without a separate per-effect loop.
+	if err := result.event.Validate(); err != nil {
+		return ruleEvalResult{}, fmt.Errorf("rule output (event %q): %w", result.event.ID, err)
+	}
+	for _, item := range result.enqueuedItems {
+		if err := item.Event.Validate(); err != nil {
+			return ruleEvalResult{}, fmt.Errorf("rule output (enqueued event %q): %w", item.Event.ID, err)
+		}
+	}
+
 	return result, nil
 }
 
-func (r Runtime) collectRules(world model.World) []Rule {
+func (r Runtime) collectRules(world model.World) ([]Rule, error) {
 	var allRules []Rule
 	if r.worldRuleRegistry != nil {
 		worldRules, err := r.worldRuleRegistry.BuildAll(world.Rules)
-		if err == nil {
-			allRules = append(allRules, worldRules...)
+		if err != nil {
+			return nil, err
 		}
+		allRules = append(allRules, worldRules...)
 	}
 	allRules = append(allRules, r.Rules...)
-	return allRules
+	return allRules, nil
 }
 
 func applyEffect(world model.World, effect model.Effect) (model.World, error) {
@@ -893,7 +849,7 @@ func payloadObject(effect model.Effect, key string) (map[string]any, error) {
 	if !ok {
 		return nil, fmt.Errorf("payload.%s must be an object", key)
 	}
-	return cloneAnyMap(raw), nil
+	return model.CloneAnyMap(raw), nil
 }
 
 func payloadOptionalString(effect model.Effect, key string) string {

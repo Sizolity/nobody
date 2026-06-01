@@ -607,7 +607,7 @@ These are logical layers over the same record model, not separate storage system
 
 The model must keep objective history separate from subjective belief. Otherwise all characters effectively share an omniscient view, which removes misunderstandings, secrets, deception, investigation, and faction conflict from the story system.
 
-**[T1]** Implemented fields: ID, Owner, Scope, Kind, SubjectIDs, EventIDs, Content, Summary, TruthStatus, Confidence, Importance, Emotion, Source, Visibility, Decay. **[T2]** Extended fields: CreatedAt/UpdatedAt/LastAccess.
+**[T1]** Implemented fields: ID, Owner, Scope, Kind, SubjectIDs, EventIDs, Content, Summary, TruthStatus, Confidence, Importance, Emotion, Source, Visibility, Decay, CreatedAt, UpdatedAt, LastAccess.
 
 Recommended record:
 
@@ -632,9 +632,9 @@ type MemoryRecord struct {
     Source      MemorySource         // [T1]
     Visibility  MemoryVisibility     // [T1]
 
-    CreatedAt   WorldTime            // [T2]
-    UpdatedAt   WorldTime            // [T2]
-    LastAccess  WorldTime            // [T2]
+    CreatedAt   WorldTime            // [T1]
+    UpdatedAt   WorldTime            // [T1]
+    LastAccess  WorldTime            // [T1]
     Decay        MemoryDecay         // [T1]
 }
 ```
@@ -756,7 +756,7 @@ archive_after
 
 **[T1]** `Event` should be the only state change entry point. Character actions, random incidents, scripts, external inputs, LLM proposals, and system maintenance should all become events before they change the world.
 
-**[T1]** Implemented fields: ID, Type, Source, ActorIDs, TargetIDs, LocationID, Intent, Description, Effects, Visibility, Causes, Results. **[T2]** Extended fields: Preconditions, Status, OccurredAt, RecordedAt, Metadata.
+**[T1]** Implemented fields: ID, Type, Source, ActorIDs, TargetIDs, LocationID, Intent, Description, Effects, Visibility, Causes, Results, Preconditions, Status, OccurredAt, RecordedAt, Metadata.
 
 Recommended conceptual shape:
 
@@ -796,10 +796,10 @@ Important fields:
 - **[T1]** `ActorIDs`, `TargetIDs`, and `LocationID`: participants and setting. Events can attach to characters, items, locations, organizations, secrets, or other entities.
 - **[T1]** `Intent`: why the event was attempted, not just what happened.
 - **[T1]** `Description`: natural-language event description for LLM context, logs, narrative output, and human debugging.
-- **[T2]** `Preconditions`: requirements before an event can apply.
+- **[T1]** `Preconditions`: requirements before an event can apply. Supported kinds: `state`, `stat`, `fact`, `relation`, `memory`. Operators: `==`, `!=`, `exists`, `not_exists` (per-kind narrowing in the runtime evaluator). See [`04-runtime-mechanisms.md`](04-runtime-mechanisms.md).
 - **[T1]** `Effects`: declarative world changes.
 - **[T1]** `Visibility`: who can know this event happened.
-- **[T2]** `Status`: proposed, validated, applied, rejected, or rolled back.
+- **[T1]** `Status`: proposed, validated, applied, rejected, rolled_back, or superseded. Validated by `WorldEvent.Validate()` when non-empty.
 - **[T1]** `Causes` and `Results`: causal chain for replay and explanation.
 
 **[T1]** Effect examples:
@@ -859,8 +859,8 @@ Recommended event statuses:
 [T1] validated
 [T1] applied
 [T1] rejected
-[T2] rolled_back
-[T2] superseded
+[T1] rolled_back
+[T1] superseded
 ```
 
 **[T1]** Recommended visibility values:
@@ -983,9 +983,9 @@ Rule actions:
 [T1] reject_event
 [T1] modify_event
 [T1] add_effect
-[T2] require_check
+[T1] require_check
 [T1] enqueue_event
-[T2] raise_conflict
+[T1] raise_conflict
 ```
 
 **[T1]** First implementation should prefer Go interfaces over a full DSL:
@@ -1031,7 +1031,8 @@ type RuleDecision struct {
 [T1] modify
 [T1] add_effects
 [T1] enqueue_events
-[T2] require_resolution
+[T1] require_check        (was design-doc `require_resolution`; surfaced via StepResult.BlockedEvents)
+[T1] raise_conflict       (surfaced via StepResult.Conflicts with RuleConflict payload)
 ```
 
 Example rules:

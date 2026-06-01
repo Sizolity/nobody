@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/sizolity/nobody/internal/world/model"
+	"github.com/sizolity/nobody/internal/world/view"
 )
 
 // DefaultCharacterSystemPrompt instructs the LLM to act as a specific
@@ -48,12 +48,16 @@ type CharacterDirectorConfig struct {
 }
 
 // CharacterDirector is a per-character event proposer. It examines each
-// entity that has an ActorComponent with CanAct=true, gathers their
-// personal context (goals, memories, spatial info), and uses a
-// TextGenerator to propose actions from that character's perspective.
+// entity that has an ActorComponent with CanAct=true, renders the
+// visibility-aware CharacterContext via CharacterContextView, and uses
+// a TextGenerator to propose actions from that character's perspective.
+// Routing through the view guarantees the LLM only sees state the
+// character can actually perceive (memories, relations, threads,
+// nearby entities).
 type CharacterDirector struct {
 	id     string
 	config CharacterDirectorConfig
+	view   view.CharacterContextView
 }
 
 // NewCharacterDirector creates a CharacterDirector with the given id and config.
@@ -76,7 +80,12 @@ func (d CharacterDirector) Propose(ctx Context) ([]model.WorldEvent, error) {
 
 	var allEvents []model.WorldEvent
 	for _, actor := range actors {
-		userPrompt := buildCharacterPrompt(actor, ctx.World)
+		cc, err := d.view.Render(ctx.World, view.CharacterContextRequest{PerspectiveID: actor.ID})
+		if err != nil {
+			return nil, fmt.Errorf("character %s: render context: %w", actor.ID, err)
+		}
+
+		userPrompt := buildCharacterPrompt(cc)
 
 		response, err := d.config.Generator.Generate(ctx.Ctx, systemPrompt, userPrompt)
 		if err != nil {
@@ -177,7 +186,13 @@ type characterThread struct {
 	Status string `json:"status"`
 }
 
-func buildCharacterPrompt(actor model.Entity, w model.World) string {
+// buildCharacterPrompt serializes a visibility-filtered CharacterContext
+// (produced by view.CharacterContextView) into the JSON schema the LLM
+// expects. The director MUST source all character-perceivable state from
+// this projection; reading directly from the World would expose private
+// memories, hidden relations, or unseen threads to the LLM.
+func buildCharacterPrompt(cc view.CharacterContext) string {
+	actor := cc.Perspective
 	ctx := characterPromptContext{
 		CharacterID: string(actor.ID),
 		Name:        actor.Name,
@@ -188,74 +203,52 @@ func buildCharacterPrompt(actor model.Entity, w model.World) string {
 		ctx.Goals = ac.Goals
 	}
 
-	var locationID model.EntityID
-	if sc, ok := actor.SpatialComponent(); ok {
-		locationID = sc.LocationID
-		if loc, exists := w.Entities[locationID]; exists {
-			ctx.Location = loc.Name
-		} else {
-			ctx.Location = string(locationID)
-		}
+	if cc.Location != nil {
+		ctx.Location = cc.Location.Name
+	} else if sc, ok := actor.SpatialComponent(); ok && sc.LocationID != "" {
+		ctx.Location = string(sc.LocationID)
 	}
 
-	if locationID != "" {
-		for _, entity := range w.Entities {
-			if entity.ID == actor.ID {
-				continue
-			}
-			if sc, ok := entity.SpatialComponent(); ok && sc.LocationID == locationID {
-				ctx.NearbyEntities = append(ctx.NearbyEntities, characterNearby{
-					ID:   string(entity.ID),
-					Type: entity.Type,
-					Name: entity.Name,
-				})
-			}
-		}
-		sort.Slice(ctx.NearbyEntities, func(i, j int) bool {
-			return ctx.NearbyEntities[i].ID < ctx.NearbyEntities[j].ID
+	for _, nearby := range cc.NearbyEntities {
+		ctx.NearbyEntities = append(ctx.NearbyEntities, characterNearby{
+			ID:   string(nearby.ID),
+			Type: nearby.Type,
+			Name: nearby.Name,
+		})
+	}
+	sort.Slice(ctx.NearbyEntities, func(i, j int) bool {
+		return ctx.NearbyEntities[i].ID < ctx.NearbyEntities[j].ID
+	})
+
+	for _, mem := range cc.Memories {
+		ctx.Memories = append(ctx.Memories, characterMemory{
+			ID:      string(mem.ID),
+			Content: mem.Content,
+			Kind:    mem.Kind,
+			Scope:   mem.Scope,
 		})
 	}
 
-	actorIDStr := string(actor.ID)
-	for _, mem := range w.Memory {
-		if mem.Owner.Kind == model.MemoryOwnerKindCharacter && mem.Owner.ID == actorIDStr {
-			ctx.Memories = append(ctx.Memories, characterMemory{
-				ID:      string(mem.ID),
-				Content: mem.Content,
-				Kind:    mem.Kind,
-				Scope:   mem.Scope,
-			})
+	for _, rel := range cc.Relations {
+		target := rel.TargetID
+		if rel.TargetID == actor.ID {
+			target = rel.SourceID
 		}
+		ctx.Relations = append(ctx.Relations, characterRelation{
+			Type:     rel.Type,
+			TargetID: string(target),
+		})
 	}
 
-	for _, rel := range w.Relations {
-		if rel.SourceID == actor.ID {
-			ctx.Relations = append(ctx.Relations, characterRelation{
-				Type:     rel.Type,
-				TargetID: string(rel.TargetID),
-			})
-		} else if rel.TargetID == actor.ID {
-			ctx.Relations = append(ctx.Relations, characterRelation{
-				Type:     rel.Type,
-				TargetID: string(rel.SourceID),
-			})
-		}
-	}
-
-	for _, th := range w.Threads {
+	for _, th := range cc.Threads {
 		if th.Status != model.ThreadStatusOpen && th.Status != model.ThreadStatusActive {
 			continue
 		}
-		for _, pid := range th.ParticipantIDs {
-			if pid == actor.ID {
-				ctx.ActiveThreads = append(ctx.ActiveThreads, characterThread{
-					ID:     string(th.ID),
-					Title:  th.Title,
-					Status: th.Status,
-				})
-				break
-			}
-		}
+		ctx.ActiveThreads = append(ctx.ActiveThreads, characterThread{
+			ID:     string(th.ID),
+			Title:  th.Title,
+			Status: th.Status,
+		})
 	}
 
 	data, err := json.Marshal(ctx)
@@ -265,24 +258,3 @@ func buildCharacterPrompt(actor model.Entity, w model.World) string {
 	return string(data)
 }
 
-// buildCharacterPromptReadable returns a human-readable version of the
-// character prompt for debugging. Not used by Propose directly.
-func buildCharacterPromptReadable(actor model.Entity, w model.World) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "Character: %s (%s)\n", actor.Name, actor.ID)
-	if actor.Description != "" {
-		fmt.Fprintf(&b, "Description: %s\n", actor.Description)
-	}
-
-	if ac, ok := actor.ActorComponent(); ok && len(ac.Goals) > 0 {
-		fmt.Fprintf(&b, "Goals: %s\n", strings.Join(ac.Goals, "; "))
-	}
-
-	if sc, ok := actor.SpatialComponent(); ok && sc.LocationID != "" {
-		if loc, exists := w.Entities[sc.LocationID]; exists {
-			fmt.Fprintf(&b, "Location: %s\n", loc.Name)
-		}
-	}
-
-	return b.String()
-}
